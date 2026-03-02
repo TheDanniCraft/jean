@@ -4654,10 +4654,43 @@ fn extract_structured_output(output: &str) -> Result<String, String> {
     Err("No structured output found in Claude response".to_string())
 }
 
+/// Truncate a diff at file boundaries instead of mid-file.
+/// Splits on `\ndiff --git` markers and keeps complete file diffs until the budget is exceeded.
+fn truncate_diff_at_file_boundaries(diff: &str, max_chars: usize) -> String {
+    if diff.len() <= max_chars {
+        return diff.to_string();
+    }
+
+    let files: Vec<&str> = diff.split("\ndiff --git ").collect();
+    let mut result = String::new();
+    let mut skipped = 0;
+
+    for (i, file_diff) in files.iter().enumerate() {
+        let chunk = if i == 0 {
+            file_diff.to_string()
+        } else {
+            format!("\ndiff --git {file_diff}")
+        };
+        if result.len() + chunk.len() > max_chars && !result.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        result.push_str(&chunk);
+    }
+
+    if skipped > 0 {
+        result.push_str(&format!(
+            "\n\n[{skipped} file(s) omitted — diff was {} chars total]",
+            diff.len()
+        ));
+    }
+    result
+}
+
 /// Get git diff between current branch and target branch
 fn get_branch_diff(repo_path: &str, target_branch: &str) -> Result<String, String> {
     let output = silent_command("git")
-        .args(["diff", &format!("origin/{target_branch}...HEAD")])
+        .args(["diff", "-U10", &format!("origin/{target_branch}...HEAD")])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("Failed to get git diff: {e}"))?;
@@ -4669,16 +4702,7 @@ fn get_branch_diff(repo_path: &str, target_branch: &str) -> Result<String, Strin
 
     let diff = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // Truncate very long diffs to avoid context overflow
-    if diff.len() > 50000 {
-        Ok(format!(
-            "{}...\n\n[Diff truncated - {} chars total]",
-            &diff[..50000],
-            diff.len()
-        ))
-    } else {
-        Ok(diff)
-    }
+    Ok(truncate_diff_at_file_boundaries(&diff, 200_000))
 }
 
 /// Get commit messages between current branch and target branch
@@ -6087,7 +6111,8 @@ pub async fn run_review_with_ai(
         .map_err(|e| format!("Failed to get uncommitted diff: {e}"))?;
 
     let uncommitted_diff = if uncommitted_output.status.success() {
-        String::from_utf8_lossy(&uncommitted_output.stdout).to_string()
+        let raw = String::from_utf8_lossy(&uncommitted_output.stdout).to_string();
+        truncate_diff_at_file_boundaries(&raw, 50_000)
     } else {
         String::new()
     };
@@ -6108,8 +6133,10 @@ pub async fn run_review_with_ai(
         Vec::new()
     };
 
-    // Read content of untracked files (skip binary and large files)
+    // Read content of untracked files (skip binary/large files, cap total at 50K)
+    const MAX_UNTRACKED_CHARS: usize = 50_000;
     let mut untracked_content = String::new();
+    let mut skipped_untracked = 0usize;
     for file in &untracked_files {
         let file_path = std::path::Path::new(&worktree_path).join(file);
         if let Ok(metadata) = std::fs::metadata(&file_path) {
@@ -6121,12 +6148,22 @@ pub async fn run_review_with_ai(
             }
         }
         if let Ok(content) = std::fs::read_to_string(&file_path) {
-            untracked_content.push_str(&format!("\n--- New file: {file}\n"));
-            untracked_content.push_str(&content);
-            untracked_content.push('\n');
+            let entry = format!("\n--- New file: {file}\n{content}\n");
+            if untracked_content.len() + entry.len() > MAX_UNTRACKED_CHARS
+                && !untracked_content.is_empty()
+            {
+                skipped_untracked += 1;
+                continue;
+            }
+            untracked_content.push_str(&entry);
         } else {
             untracked_content.push_str(&format!("\n--- New file: {file} (binary or unreadable)\n"));
         }
+    }
+    if skipped_untracked > 0 {
+        untracked_content.push_str(&format!(
+            "\n[{skipped_untracked} untracked file(s) omitted due to size limit]"
+        ));
     }
 
     // Check if there's anything to review

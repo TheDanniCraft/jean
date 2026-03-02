@@ -464,77 +464,9 @@ export function useMessageSending({
     }
   }, [activeSessionId, activeWorktreeId])
 
-  // Direct callback for ReviewResultsPanel fix buttons — goes through sendMessageNow
-  // Mirrors handleSubmit's state cleanup to ensure proper session lifecycle
-  const sendReviewFix = useCallback(
-    (message: string, executionMode: 'plan' | 'yolo') => {
-      if (!activeSessionId || !activeWorktreeId || !activeWorktreePath) return
-
-      // State cleanup (same as handleSubmit) — transition session out of reviewing/waiting
-      const {
-        setExecutionMode,
-        isSending,
-        enqueueMessage,
-        setSessionReviewing,
-        setQuestionsSkipped,
-        setWaitingForInput,
-        clearPendingDigest,
-      } = useChatStore.getState()
-
-      setExecutionMode(activeSessionId, executionMode)
-      setSessionReviewing(activeSessionId, false)
-      setQuestionsSkipped(activeSessionId, false)
-      setWaitingForInput(activeSessionId, false)
-      clearPendingDigest(activeSessionId)
-
-      const queuedMsg: QueuedMessage = {
-        id: generateId(),
-        message,
-        pendingImages: [],
-        pendingFiles: [],
-        pendingSkills: [],
-        pendingTextFiles: [],
-        model: selectedModelRef.current,
-        provider: selectedProviderRef.current,
-        executionMode,
-        thinkingLevel: selectedThinkingLevelRef.current,
-        effortLevel:
-          useAdaptiveThinkingRef.current || isCodexBackendRef.current
-            ? selectedEffortLevelRef.current
-            : undefined,
-        mcpConfig: buildMcpConfigJson(
-          mcpServersDataRef.current ?? [],
-          enabledMcpServersRef.current
-        ),
-        backend:
-          selectedBackendRef.current !== 'claude'
-            ? selectedBackendRef.current
-            : undefined,
-        queuedAt: Date.now(),
-      }
-
-      if (isSending(activeSessionId)) {
-        enqueueMessage(activeSessionId, queuedMsg)
-        toast.info('Fix queued — will start when current task completes')
-        return
-      }
-
-      scrollToBottom(true)
-      sendMessageNow(queuedMsg)
-    },
-    [
-      activeSessionId,
-      activeWorktreeId,
-      activeWorktreePath,
-      scrollToBottom,
-      sendMessageNow,
-    ]
-  )
-
   return {
     resolveCustomProfile,
     sendMessageNow,
-    sendReviewFix,
     handleSubmit,
     handleCancel,
     handleGitDiffAddToPrompt,

@@ -17,6 +17,7 @@ import {
   triggerImmediateGitPoll,
   performGitPull,
 } from '@/services/git-status'
+import { useRemotePicker } from '@/hooks/useRemotePicker'
 import { isBaseSession } from '@/types/projects'
 import { GitStatusBadges } from '@/components/ui/git-status-badges'
 const GitDiffModal = lazy(() =>
@@ -113,6 +114,7 @@ export function WorktreeCanvasView({
   }, [diffRequest])
 
   const defaultBranch = project?.default_branch ?? 'main'
+  const pickRemoteOrRun = useRemotePicker(worktreePath)
 
   const handlePull = useCallback(
     async (e: React.MouseEvent) => {
@@ -128,23 +130,25 @@ export function WorktreeCanvasView({
   )
 
   const handlePush = useCallback(
-    async (e: React.MouseEvent) => {
+    (e: React.MouseEvent) => {
       e.stopPropagation()
-      const toastId = toast.loading('Pushing changes...')
-      try {
-        const result = await gitPush(worktreePath, worktree?.pr_number)
-        triggerImmediateGitPoll()
-        if (project) fetchWorktreesStatus(project.id)
-        if (result.fellBack) {
-          toast.warning('Could not push to PR branch, pushed to new branch instead', { id: toastId })
-        } else {
-          toast.success('Changes pushed', { id: toastId })
+      pickRemoteOrRun(async remote => {
+        const toastId = toast.loading('Pushing changes...')
+        try {
+          const result = await gitPush(worktreePath, worktree?.pr_number, remote)
+          triggerImmediateGitPoll()
+          if (project) fetchWorktreesStatus(project.id)
+          if (result.fellBack) {
+            toast.warning('Could not push to PR branch, pushed to new branch instead', { id: toastId })
+          } else {
+            toast.success('Changes pushed', { id: toastId })
+          }
+        } catch (error) {
+          toast.error(`Push failed: ${error}`, { id: toastId })
         }
-      } catch (error) {
-        toast.error(`Push failed: ${error}`, { id: toastId })
-      }
+      })
     },
-    [worktreePath, worktree?.pr_number, project]
+    [worktreePath, worktree?.pr_number, project, pickRemoteOrRun]
   )
 
   const handleDiffClick = useCallback(() => {

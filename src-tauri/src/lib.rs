@@ -193,7 +193,7 @@ pub struct AppPreferences {
     #[serde(default)]
     pub restore_last_session: bool, // Restore last session when switching projects (default: false)
     #[serde(default)]
-    pub close_original_on_clear_context: bool, // Close original session when using Clear Context and yolo (default: false)
+    pub close_original_on_clear_context: bool, // Close original session when using Clear Context and yolo (default: true)
     #[serde(default)]
     pub build_model: Option<String>, // Model override for plan approval (build mode), None = use session model
     #[serde(default)]
@@ -961,7 +961,7 @@ impl Default for AppPreferences {
             codex_multi_agent_enabled: false,
             codex_max_agent_threads: default_codex_max_agent_threads(),
             restore_last_session: false,
-            close_original_on_clear_context: false,
+            close_original_on_clear_context: true,
             build_model: None,
             yolo_model: None,
             linear_api_key: None,

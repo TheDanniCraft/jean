@@ -1416,7 +1416,7 @@ export const GeneralPane: React.FC = () => {
             description="Automatically close the original session when using Clear Context and yolo"
           >
             <Switch
-              checked={preferences?.close_original_on_clear_context ?? false}
+              checked={preferences?.close_original_on_clear_context ?? true}
               onCheckedChange={checked => {
                 if (preferences) {
                   savePreferences.mutate({

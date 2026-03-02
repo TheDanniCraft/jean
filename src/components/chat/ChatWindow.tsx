@@ -914,6 +914,59 @@ export function ChatWindow({
     ]
   )
 
+  // Opens a new session and sends the review fix message there
+  const handleReviewFix = useCallback(
+    async (message: string, executionMode: 'plan' | 'yolo') => {
+      if (!activeSessionId || !activeWorktreeId || !activeWorktreePath) return
+
+      // Mark the current session as no longer reviewing
+      const store = useChatStore.getState()
+      store.setSessionReviewing(activeSessionId, false)
+
+      // Create new session
+      let newSession: Session
+      try {
+        newSession = await createSession.mutateAsync({
+          worktreeId: activeWorktreeId,
+          worktreePath: activeWorktreePath,
+        })
+      } catch (err) {
+        toast.error(`Failed to create session: ${err}`)
+        return
+      }
+
+      // Switch to new session
+      store.setActiveSession(activeWorktreeId, newSession.id)
+
+      const model = selectedModelRef.current
+      store.setExecutionMode(newSession.id, executionMode)
+      store.setLastSentMessage(newSession.id, message)
+      store.setError(newSession.id, null)
+      store.addSendingSession(newSession.id)
+      store.setSelectedModel(newSession.id, model)
+      store.setExecutingMode(newSession.id, executionMode)
+
+      sendMessage.mutate({
+        sessionId: newSession.id,
+        worktreeId: activeWorktreeId,
+        worktreePath: activeWorktreePath,
+        message,
+        model,
+        executionMode,
+        thinkingLevel: selectedThinkingLevelRef.current,
+      })
+    },
+    [
+      activeSessionId,
+      activeWorktreeId,
+      activeWorktreePath,
+      createSession,
+      sendMessage,
+      selectedModelRef,
+      selectedThinkingLevelRef,
+    ]
+  )
+
   // Note: Streaming event listeners are in App.tsx, not here
   // This ensures they stay active even when ChatWindow is unmounted
 
@@ -921,7 +974,6 @@ export function ChatWindow({
   const {
     resolveCustomProfile,
     sendMessageNow,
-    sendReviewFix,
     handleSubmit,
     handleCancel,
     handleGitDiffAddToPrompt,
@@ -1859,7 +1911,7 @@ export function ChatWindow({
                   onExpand={handleReviewSidebarExpand}
                 >
                   {activeSessionId && (
-                    <ReviewResultsPanel sessionId={activeSessionId} onSendFix={sendReviewFix} />
+                    <ReviewResultsPanel sessionId={activeSessionId} onSendFix={handleReviewFix} />
                   )}
                 </ResizablePanel>
               </>

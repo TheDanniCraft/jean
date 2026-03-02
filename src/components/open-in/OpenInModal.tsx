@@ -22,8 +22,7 @@ import {
   useOpenWorktreeInFinder,
   useOpenWorktreeInTerminal,
   useOpenWorktreeInEditor,
-  useOpenBranchOnGitHub,
-  useGitHubRemotes,
+  GitHubRemote,
   useProjects,
   useWorktree,
 } from '@/services/projects'
@@ -49,6 +48,7 @@ export function OpenInModal() {
     setOpenInModalOpen,
     openPreferencesPane,
     sessionChatModalWorktreeId,
+    openRemotePicker,
   } = useUIStore()
   const selectedWorktreeIdFromProjects = useProjectsStore(
     state => state.selectedWorktreeId
@@ -63,13 +63,11 @@ export function OpenInModal() {
   const contentRef = useRef<HTMLDivElement>(null)
   const hasInitializedRef = useRef(false)
   const [selectedOption, setSelectedOption] = useState<string>('editor')
-  const [showingRemotes, setShowingRemotes] = useState(false)
 
   const { data: worktree } = useWorktree(selectedWorktreeId)
   const openInFinder = useOpenWorktreeInFinder()
   const openInTerminal = useOpenWorktreeInTerminal()
   const openInEditor = useOpenWorktreeInEditor()
-  const openOnGitHub = useOpenBranchOnGitHub()
   const { data: preferences } = usePreferences()
   const activeSessionId = useChatStore(state =>
     selectedWorktreeId
@@ -175,7 +173,6 @@ export function OpenInModal() {
   useEffect(() => {
     if (!openInModalOpen) {
       hasInitializedRef.current = false
-      setShowingRemotes(false)
     }
   }, [openInModalOpen])
 
@@ -202,9 +199,6 @@ export function OpenInModal() {
     }
     return null
   }, [worktree?.path, selectedWorktreeId, selectedProjectId, projects])
-
-  const { data: githubRemotes } = useGitHubRemotes(targetPath, openInModalOpen)
-  const hasMultipleRemotes = (githubRemotes?.length ?? 0) > 1
 
   const executeAction = useCallback(
     (optionId: string) => {
@@ -244,10 +238,6 @@ export function OpenInModal() {
           }
           break
         case 'github': {
-          if (hasMultipleRemotes) {
-            setShowingRemotes(true)
-            return // don't close modal
-          }
           const branch = worktree?.branch
           if (!branch) {
             if (selectedProjectId) {
@@ -257,7 +247,23 @@ export function OpenInModal() {
             }
             break
           }
-          openOnGitHub.mutate({ repoPath: targetPath, branch })
+          invoke<GitHubRemote[]>('get_github_remotes', {
+            repoPath: targetPath,
+          })
+            .then(remotes => {
+              if (!remotes || remotes.length <= 1) {
+                const url = remotes?.[0]?.url
+                if (url) openExternal(`${url}/tree/${branch}`)
+              } else {
+                openRemotePicker(targetPath!, remoteName => {
+                  const remote = remotes.find(r => r.name === remoteName)
+                  if (remote) openExternal(`${remote.url}/tree/${branch}`)
+                })
+              }
+            })
+            .catch(() =>
+              notify('Failed to fetch remotes', undefined, { type: 'error' })
+            )
           break
         }
       }
@@ -267,11 +273,10 @@ export function OpenInModal() {
     [
       contextOptions,
       targetPath,
-      hasMultipleRemotes,
       openInEditor,
       openInTerminal,
       openInFinder,
-      openOnGitHub,
+      openRemotePicker,
       worktree,
       preferences,
       setOpenInModalOpen,
@@ -279,48 +284,9 @@ export function OpenInModal() {
     ]
   )
 
-  const openRemote = useCallback(
-    (remoteIndex: number) => {
-      if (!githubRemotes) return
-      const remote = githubRemotes[remoteIndex]
-      if (!remote) return
-      const branch = worktree?.branch
-      const url = branch ? `${remote.url}/tree/${branch}` : remote.url
-      openExternal(url)
-      setOpenInModalOpen(false)
-    },
-    [githubRemotes, worktree?.branch, setOpenInModalOpen]
-  )
-
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       const key = e.key.toLowerCase()
-
-      // Remote selection sub-state
-      if (showingRemotes && githubRemotes) {
-        if (key === 'escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          e.nativeEvent.stopImmediatePropagation()
-          setShowingRemotes(false)
-          return
-        }
-        const remoteIndex = parseInt(e.key, 10)
-        if (
-          !isNaN(remoteIndex) &&
-          remoteIndex >= 1 &&
-          remoteIndex <= githubRemotes.length
-        ) {
-          e.preventDefault()
-          e.stopPropagation()
-          e.nativeEvent.stopImmediatePropagation()
-          openRemote(remoteIndex - 1)
-          return
-        }
-        // Any other key: collapse sub-state and fall through
-        setShowingRemotes(false)
-      }
-
       const allIds = allOptions.map(opt => opt.id)
 
       // Quick select with shortcut keys
@@ -349,14 +315,7 @@ export function OpenInModal() {
         }
       }
     },
-    [
-      showingRemotes,
-      githubRemotes,
-      openRemote,
-      executeAction,
-      selectedOption,
-      allOptions,
-    ]
+    [executeAction, selectedOption, allOptions]
   )
 
   const handleOpenSettings = useCallback(() => {
@@ -413,37 +372,7 @@ export function OpenInModal() {
 
         <div className="pb-2">{baseOptions.map(renderOption)}</div>
 
-        {showingRemotes && githubRemotes && githubRemotes.length > 0 && (
-          <div className="border-t pb-2">
-            <div className="px-4 pt-2 pb-1">
-              <span className="text-xs text-muted-foreground">
-                Pick a remote
-              </span>
-            </div>
-            {githubRemotes.map((remote, i) => (
-              <button
-                key={remote.name}
-                onClick={() => openRemote(i)}
-                className={cn(
-                  'w-full flex items-center justify-between px-4 py-2 text-sm transition-colors',
-                  'hover:bg-accent focus:outline-none'
-                )}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <Github className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="truncate">{remote.name}</span>
-                </div>
-                {i < 9 && (
-                  <kbd className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-2 shrink-0">
-                    {i + 1}
-                  </kbd>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {contextOptions.length > 0 && !showingRemotes && (
+        {contextOptions.length > 0 && (
           <div className="border-t pb-2">
             <div className="px-4 pt-2 pb-1">
               <span className="text-xs text-muted-foreground">Contexts</span>

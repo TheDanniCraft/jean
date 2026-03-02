@@ -121,6 +121,7 @@ import {
   triggerImmediateGitPoll,
   performGitPull,
 } from '@/services/git-status'
+import { useRemotePicker } from '@/hooks/useRemotePicker'
 
 interface ProjectCanvasViewProps {
   projectId: string
@@ -266,6 +267,8 @@ function WorktreeSectionHeader({
     ? uncommittedRemoved
     : branchDiffRemoved + uncommittedRemoved
 
+  const pickRemoteOrRun = useRemotePicker(worktree.path)
+
   const handlePull = useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -280,23 +283,25 @@ function WorktreeSectionHeader({
   )
 
   const handlePush = useCallback(
-    async (e: React.MouseEvent) => {
+    (e: React.MouseEvent) => {
       e.stopPropagation()
-      const toastId = toast.loading('Pushing changes...')
-      try {
-        const result = await gitPush(worktree.path, worktree.pr_number)
-        triggerImmediateGitPoll()
-        fetchWorktreesStatus(projectId)
-        if (result.fellBack) {
-          toast.warning('Could not push to PR branch, pushed to new branch instead', { id: toastId })
-        } else {
-          toast.success('Changes pushed', { id: toastId })
+      pickRemoteOrRun(async remote => {
+        const toastId = toast.loading('Pushing changes...')
+        try {
+          const result = await gitPush(worktree.path, worktree.pr_number, remote)
+          triggerImmediateGitPoll()
+          fetchWorktreesStatus(projectId)
+          if (result.fellBack) {
+            toast.warning('Could not push to PR branch, pushed to new branch instead', { id: toastId })
+          } else {
+            toast.success('Changes pushed', { id: toastId })
+          }
+        } catch (error) {
+          toast.error(`Push failed: ${error}`, { id: toastId })
         }
-      } catch (error) {
-        toast.error(`Push failed: ${error}`, { id: toastId })
-      }
+      })
     },
-    [worktree.path, worktree.pr_number, projectId]
+    [worktree.path, worktree.pr_number, projectId, pickRemoteOrRun]
   )
 
   const handleDiffClick = useCallback(() => {

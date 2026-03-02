@@ -272,8 +272,13 @@ export default function useStreamingEvents({
       const isCurrentlyViewing = isViewingInFullView || isViewingInModal
 
       // If user is currently viewing this session, bump last_opened_at so it
-      // doesn't appear as "unread" (updated_at will be newer after the run ends)
-      if (isCurrentlyViewing) {
+      // doesn't appear as "unread" (updated_at will be newer after the run ends).
+      // Also auto-mark user-initiated sessions (e.g. Clear Context & YOLO) as opened.
+      const { userInitiatedSessionIds, removeUserInitiatedSession } =
+        useChatStore.getState()
+      const isUserInitiated = !!userInitiatedSessionIds[sessionId]
+      if (isCurrentlyViewing || isUserInitiated) {
+        if (isUserInitiated) removeUserInitiatedSession(sessionId)
         invoke('set_session_last_opened', { sessionId })
           .then(() =>
             window.dispatchEvent(new CustomEvent('session-opened'))
@@ -292,7 +297,7 @@ export default function useStreamingEvents({
       const wasAlreadyReviewing =
         useChatStore.getState().reviewingSessions[sessionId] ?? false
 
-      if (!isCurrentlyViewing && sessionRecapEnabled && !wasAlreadyReviewing) {
+      if (!isCurrentlyViewing && !isUserInitiated && sessionRecapEnabled && !wasAlreadyReviewing) {
         // Mark for digest and generate it in the background immediately
         markSessionNeedsDigest(sessionId)
 
@@ -825,8 +830,13 @@ export default function useStreamingEvents({
       const isCurrentlyViewing = isViewingInFullView || isViewingInModal
 
       // If user is currently viewing this session, bump last_opened_at so it
-      // doesn't appear as "unread" (updated_at will be newer after the run ends)
-      if (isCurrentlyViewing) {
+      // doesn't appear as "unread" (updated_at will be newer after the run ends).
+      // Also auto-mark user-initiated sessions (e.g. Clear Context & YOLO) as opened.
+      const { userInitiatedSessionIds: uisErr, removeUserInitiatedSession: rusErr } =
+        useChatStore.getState()
+      const isUserInitiatedErr = !!uisErr[session_id]
+      if (isCurrentlyViewing || isUserInitiatedErr) {
+        if (isUserInitiatedErr) rusErr(session_id)
         invoke('set_session_last_opened', { sessionId: session_id })
           .then(() =>
             window.dispatchEvent(new CustomEvent('session-opened'))
@@ -844,7 +854,7 @@ export default function useStreamingEvents({
       const wasAlreadyReviewing =
         useChatStore.getState().reviewingSessions[session_id] ?? false
 
-      if (!isCurrentlyViewing && sessionRecapEnabled && !wasAlreadyReviewing) {
+      if (!isCurrentlyViewing && !isUserInitiatedErr && sessionRecapEnabled && !wasAlreadyReviewing) {
         // Mark for digest and generate it in the background immediately
         markSessionNeedsDigest(session_id)
 
@@ -988,8 +998,13 @@ export default function useStreamingEvents({
         const isCurrentlyViewing = isViewingInFullView || isViewingInModal
 
         // If user is currently viewing this session, bump last_opened_at so it
-        // doesn't appear as "unread" (updated_at will be newer after the run ends)
-        if (isCurrentlyViewing) {
+        // doesn't appear as "unread" (updated_at will be newer after the run ends).
+        // Also auto-mark user-initiated sessions (e.g. Clear Context & YOLO) as opened.
+        const { userInitiatedSessionIds: uisCan, removeUserInitiatedSession: rusCan } =
+          useChatStore.getState()
+        const isUserInitiatedCan = !!uisCan[session_id]
+        if (isCurrentlyViewing || isUserInitiatedCan) {
+          if (isUserInitiatedCan) rusCan(session_id)
           invoke('set_session_last_opened', { sessionId: session_id })
             .then(() =>
               window.dispatchEvent(new CustomEvent('session-opened'))
@@ -1009,6 +1024,7 @@ export default function useStreamingEvents({
 
         if (
           !isCurrentlyViewing &&
+          !isUserInitiatedCan &&
           sessionRecapEnabled &&
           !wasAlreadyReviewing
         ) {

@@ -69,6 +69,9 @@ interface ChatUIState {
   // Set of session IDs currently sending (supports multiple concurrent sessions)
   sendingSessionIds: Record<string, boolean>
 
+  // Session IDs initiated by the user (e.g. Clear Context & YOLO) — auto-mark as opened on completion
+  userInitiatedSessionIds: Record<string, true>
+
   // Set of session IDs waiting for user input (AskUserQuestion/ExitPlanMode)
   // Separate from sendingSessionIds to allow user to send messages while waiting
   waitingForInputSessionIds: Record<string, boolean>
@@ -267,6 +270,10 @@ interface ChatUIState {
   addSendingSession: (sessionId: string) => void
   removeSendingSession: (sessionId: string) => void
   isSending: (sessionId: string) => boolean
+
+  // Actions - User-initiated sessions (auto-mark as opened on completion)
+  addUserInitiatedSession: (sessionId: string) => void
+  removeUserInitiatedSession: (sessionId: string) => void
 
   // Actions - Session-based waiting for input state
   setWaitingForInput: (sessionId: string, isWaiting: boolean) => void
@@ -538,6 +545,7 @@ export const useChatStore = create<ChatUIState>()(
       fixedReviewFindings: {},
       worktreePaths: {},
       sendingSessionIds: {},
+      userInitiatedSessionIds: {},
       waitingForInputSessionIds: {},
       sessionWorktreeMap: {},
       streamingContents: {},
@@ -879,6 +887,33 @@ export const useChatStore = create<ChatUIState>()(
         ),
 
       isSending: sessionId => get().sendingSessionIds[sessionId] ?? false,
+
+      // User-initiated sessions (auto-mark as opened on completion)
+      addUserInitiatedSession: sessionId =>
+        set(
+          state => {
+            if (state.userInitiatedSessionIds[sessionId]) return state
+            return {
+              userInitiatedSessionIds: {
+                ...state.userInitiatedSessionIds,
+                [sessionId]: true as const,
+              },
+            }
+          },
+          undefined,
+          'addUserInitiatedSession'
+        ),
+
+      removeUserInitiatedSession: sessionId =>
+        set(
+          state => {
+            if (!(sessionId in state.userInitiatedSessionIds)) return state
+            const { [sessionId]: _, ...rest } = state.userInitiatedSessionIds
+            return { userInitiatedSessionIds: rest }
+          },
+          undefined,
+          'removeUserInitiatedSession'
+        ),
 
       // Waiting for input state (session-based)
       setWaitingForInput: (sessionId, isWaiting) =>

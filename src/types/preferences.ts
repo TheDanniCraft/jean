@@ -713,7 +713,7 @@ export interface AppPreferences {
   codex_multi_agent_enabled: boolean // Enable Codex multi-agent collaboration (experimental)
   codex_max_agent_threads: number // Max concurrent agent threads (1-8) when multi-agent is enabled
   restore_last_session: boolean // Restore last session when switching projects (default: false)
-  close_original_on_clear_context: boolean // Close original session when using Clear Context and yolo (default: false)
+  close_original_on_clear_context: boolean // Close original session when using Clear Context and yolo (default: true)
   build_model: string | null // Model override for plan approval (build mode), null = use session model
   yolo_model: string | null // Model override for yolo plan approval, null = use session model
   linear_api_key: string | null // Global Linear personal API key (inherited by all projects)
@@ -1200,7 +1200,7 @@ export const defaultPreferences: AppPreferences = {
   codex_multi_agent_enabled: false, // Default: disabled
   codex_max_agent_threads: 3, // Default: 3 threads
   restore_last_session: false, // Default: disabled
-  close_original_on_clear_context: false, // Default: disabled
+  close_original_on_clear_context: true, // Default: enabled
   build_model: null, // Default: use session model
   yolo_model: null, // Default: use session model
   linear_api_key: null, // Default: no global Linear API key

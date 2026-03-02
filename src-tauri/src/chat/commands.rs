@@ -2645,35 +2645,21 @@ const JPEG_QUALITY: u8 = 85;
 /// Minimum file size to bother processing (skip tiny images)
 const MIN_PROCESS_SIZE: usize = 50 * 1024; // 50KB
 
-/// Process image: resize to Claude's optimal limit (1568px) and convert opaque PNG→JPEG.
-/// Returns (processed_bytes, final_extension) — extension may change (e.g. png→jpg).
-fn process_image(image_data: &[u8], extension: &str) -> Result<(Vec<u8>, String), String> {
-    // Skip GIFs (may be animated) and small images
-    if extension == "gif" || image_data.len() < MIN_PROCESS_SIZE {
-        return Ok((image_data.to_vec(), extension.to_string()));
-    }
-
-    let img =
-        image::load_from_memory(image_data).map_err(|e| format!("Failed to decode image: {e}"))?;
-
+/// Inner processing: resize and/or re-encode an already-decoded image.
+/// Called by both `process_image` (file/paste path) and `read_clipboard_image` (avoids
+/// PNG encode→decode round-trip for clipboard images).
+fn process_dynamic_image(
+    img: image::DynamicImage,
+    extension: &str,
+    needs_resize: bool,
+    convert_to_jpeg: bool,
+) -> Result<(Vec<u8>, String), String> {
     let (width, height) = (img.width(), img.height());
-    let max_dim = width.max(height);
-    let needs_resize = max_dim > MAX_IMAGE_DIMENSION;
-
-    // Determine target format: convert opaque PNGs to JPEG
-    let (target_ext, convert_to_jpeg) = if extension == "png" && !img.color().has_alpha() {
-        ("jpg", true)
-    } else {
-        (extension, false)
-    };
-
-    // Nothing to do — return original bytes
-    if !needs_resize && !convert_to_jpeg {
-        return Ok((image_data.to_vec(), extension.to_string()));
-    }
+    let target_ext = if convert_to_jpeg { "jpg" } else { extension };
 
     // Resize if needed (preserve aspect ratio)
     let processed = if needs_resize {
+        let max_dim = width.max(height);
         let scale = MAX_IMAGE_DIMENSION as f32 / max_dim as f32;
         let new_w = (width as f32 * scale) as u32;
         let new_h = (height as f32 * scale) as u32;
@@ -2681,6 +2667,8 @@ fn process_image(image_data: &[u8], extension: &str) -> Result<(Vec<u8>, String)
     } else {
         img
     };
+
+    let (out_w, out_h) = (processed.width(), processed.height());
 
     // Encode to target format
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -2697,14 +2685,35 @@ fn process_image(image_data: &[u8], extension: &str) -> Result<(Vec<u8>, String)
 
     let result = buf.into_inner();
     log::debug!(
-        "Image processed: {width}x{height} -> {}x{}, {extension}->{target_ext} ({} -> {} bytes)",
-        processed.width(),
-        processed.height(),
-        image_data.len(),
+        "Image processed: {width}x{height} -> {out_w}x{out_h}, {extension}->{target_ext} ({} bytes)",
         result.len()
     );
 
     Ok((result, target_ext.to_string()))
+}
+
+/// Process image: resize to Claude's optimal limit (1568px) and convert opaque PNG→JPEG.
+/// Returns (processed_bytes, final_extension) — extension may change (e.g. png→jpg).
+fn process_image(image_data: &[u8], extension: &str) -> Result<(Vec<u8>, String), String> {
+    // Skip GIFs (may be animated) and small images
+    if extension == "gif" || image_data.len() < MIN_PROCESS_SIZE {
+        return Ok((image_data.to_vec(), extension.to_string()));
+    }
+
+    let img =
+        image::load_from_memory(image_data).map_err(|e| format!("Failed to decode image: {e}"))?;
+
+    let max_dim = img.width().max(img.height());
+    let needs_resize = max_dim > MAX_IMAGE_DIMENSION;
+    // Determine target format: convert opaque PNGs to JPEG
+    let convert_to_jpeg = extension == "png" && !img.color().has_alpha();
+
+    // Nothing to do — return original bytes (avoid re-encode)
+    if !needs_resize && !convert_to_jpeg {
+        return Ok((image_data.to_vec(), extension.to_string()));
+    }
+
+    process_dynamic_image(img, extension, needs_resize, convert_to_jpeg)
 }
 
 /// Save a pasted image to the app data directory
@@ -2830,7 +2839,7 @@ pub async fn read_clipboard_image(
             ));
         }
 
-        // Convert RGBA ImageData to PNG bytes
+        // Build DynamicImage directly from RGBA pixels — avoids PNG encode→decode round-trip
         let rgba = image::RgbaImage::from_raw(
             image_data.width as u32,
             image_data.height as u32,
@@ -2838,14 +2847,11 @@ pub async fn read_clipboard_image(
         )
         .ok_or_else(|| "Failed to create image from clipboard data".to_string())?;
 
-        let mut png_buf = std::io::Cursor::new(Vec::new());
-        rgba.write_to(&mut png_buf, image::ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode clipboard image as PNG: {e}"))?;
+        let img = image::DynamicImage::ImageRgba8(rgba);
 
-        let png_bytes = png_buf.into_inner();
-
-        // Process through existing pipeline (resize, PNG→JPEG conversion)
-        let (processed_data, final_ext) = process_image(&png_bytes, "png")?;
+        // RGBA from clipboard always has an alpha channel, so never convert to JPEG
+        let needs_resize = img.width().max(img.height()) > MAX_IMAGE_DIMENSION;
+        let (processed_data, final_ext) = process_dynamic_image(img, "png", needs_resize, false)?;
         Ok(Some(save_image_to_disk(&images_dir, &processed_data, &final_ext)?))
     })
     .await

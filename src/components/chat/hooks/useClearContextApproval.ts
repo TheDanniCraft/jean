@@ -134,12 +134,11 @@ export function useClearContextApproval({
 
       // Step 4: Switch to new session
       store.setActiveSession(worktreeId, newSession.id)
+      store.addUserInitiatedSession(newSession.id)
 
       // Step 5: Send plan as first message in YOLO mode
       const model = preferences?.yolo_model ?? preferences?.selected_model ?? 'opus'
-      if (preferences?.yolo_model && preferences.yolo_model !== (preferences?.selected_model ?? 'opus')) {
-        toast.info(`Using ${preferences.yolo_model} model for yolo`)
-      }
+      toast.info(`Using ${model} model for yolo`)
       const thinkingLevel = preferences?.thinking_level ?? 'off'
       const resolvedPlanFilePath = card.planFilePath || store.getPlanFilePath(sessionId)
       const planFileLine = resolvedPlanFilePath ? `\nPlan file: ${resolvedPlanFilePath}\n` : ''

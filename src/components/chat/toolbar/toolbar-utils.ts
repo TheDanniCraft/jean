@@ -32,10 +32,22 @@ function formatProviderName(provider: string): string {
     anthropic: 'Anthropic',
     opencode: 'OpenCode',
     openai: 'OpenAI',
+    openrouter: 'OpenRouter',
     google: 'Google',
+    deepseek: 'DeepSeek',
+    'meta-llama': 'Meta',
+    mistralai: 'Mistral',
+    qwen: 'Qwen',
     moonshotai: 'Moonshot AI',
     minimax: 'MiniMax',
     xai: 'xAI',
+    'black-forest-labs': 'Black Forest Labs',
+    cohere: 'Cohere',
+    nvidia: 'NVIDIA',
+    arcee: 'Arcee AI',
+    'arcee-ai': 'Arcee AI',
+    featherless: 'Featherless',
+    cognitivecomputations: 'Cognitive Computations',
   }
   return (
     knownProviders[provider.toLowerCase()] ??
@@ -76,10 +88,29 @@ function formatModelToken(token: string): string {
 }
 
 export function formatOpencodeModelLabel(raw: string): string {
-  const [provider, model] = raw.split('/')
-  if (!provider || !model) return raw
+  const parts = raw.split('/')
+  if (parts.length < 2) return raw
 
-  const rawTokens = model.split('-').filter(Boolean)
+  let provider: string
+  let modelPath: string
+
+  if (parts[0] === 'openrouter' && parts.length >= 3) {
+    // OpenRouter proxies models from other providers
+    // Format: openrouter/anthropic/claude-3.5-haiku
+    // Extract the actual provider and model path
+    provider = parts[1] ?? ''
+    modelPath = parts.slice(2).join('/')
+  } else {
+    provider = parts[0] ?? ''
+    modelPath = parts.slice(1).join('/')
+  }
+
+  // Strip optional :qualifier suffix (e.g. ":free", ":exacto") and surface as badge
+  const colonIdx = modelPath.lastIndexOf(':')
+  const qualifier = colonIdx !== -1 ? modelPath.slice(colonIdx + 1) : null
+  const modelName = colonIdx !== -1 ? modelPath.slice(0, colonIdx) : modelPath
+
+  const rawTokens = modelName.split('-').filter(Boolean)
   const mergedTokens: string[] = []
   for (let i = 0; i < rawTokens.length; i++) {
     const current = rawTokens[i]
@@ -94,10 +125,7 @@ export function formatOpencodeModelLabel(raw: string): string {
     mergedTokens.push(current)
   }
 
-  const modelLabel = mergedTokens
-    .filter(Boolean)
-    .map(formatModelToken)
-    .join(' ')
-
-  return `${modelLabel} (${formatProviderName(provider)})`
+  const modelLabel = mergedTokens.filter(Boolean).map(formatModelToken).join(' ')
+  const qualifierSuffix = qualifier ? ` [${qualifier}]` : ''
+  return `${modelLabel} (${formatProviderName(provider)})${qualifierSuffix}`
 }

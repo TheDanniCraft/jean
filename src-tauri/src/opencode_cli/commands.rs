@@ -176,21 +176,26 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
+/// Validates model identifiers in the format: `provider/model` or `openrouter/provider/model`.
+/// Both support an optional `:qualifier` suffix on the model (e.g. `:free`, `:exacto`).
 fn is_model_identifier(value: &str) -> bool {
-    let Some((provider, model)) = value.split_once('/') else {
-        return false;
-    };
-
-    if provider.is_empty() || model.is_empty() || model.contains('/') {
+    if value.is_empty() || !value.contains('/') {
         return false;
     }
 
-    fn allowed(s: &str) -> bool {
-        s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    fn allowed_segment(s: &str) -> bool {
+        !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     }
 
-    allowed(provider) && allowed(model)
+    fn allowed_last_segment(s: &str) -> bool {
+        // Allow optional :qualifier suffix (e.g. ":free", ":exacto")
+        let base = s.split_once(':').map_or(s, |(b, _)| b);
+        allowed_segment(base)
+    }
+
+    let parts: Vec<&str> = value.split('/').collect();
+    let n = parts.len();
+    parts[..n - 1].iter().all(|s| allowed_segment(s)) && allowed_last_segment(parts[n - 1])
 }
 
 /// Check if OpenCode CLI has any configured credentials.

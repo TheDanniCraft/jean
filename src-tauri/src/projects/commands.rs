@@ -3130,6 +3130,27 @@ pub async fn open_worktree_in_terminal(
                     Err(e) => return Err(format_open_error("Ghostty", &e)),
                 }
             }
+            "iterm2" => {
+                // Open new window/tab in iTerm2 and cd into the directory
+                format!(
+                    r#"tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then
+                        set newWindow to (create window with default profile)
+                        set sess to current session of newWindow
+                    else
+                        tell current window
+                            set newTab to (create tab with default profile)
+                            set sess to current session of newTab
+                        end tell
+                    end if
+                    tell sess
+                        write text "cd '{}' && clear"
+                    end tell
+                end tell"#,
+                    escaped_path
+                )
+            }
             _ => {
                 // Default to Terminal.app
                 format!(

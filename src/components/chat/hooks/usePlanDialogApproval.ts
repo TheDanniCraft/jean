@@ -6,6 +6,7 @@ import {
   chatQueryKeys,
   markPlanApproved as markPlanApprovedService,
 } from '@/services/chat'
+import { invoke } from '@/lib/transport'
 import { buildMcpConfigJson } from '@/services/mcp'
 import { generateId } from '@/lib/uuid'
 import type {
@@ -13,6 +14,7 @@ import type {
   QueuedMessage,
   ThinkingLevel,
   EffortLevel,
+  WorktreeSessions,
 } from '@/types/chat'
 import type { Session } from '@/types/chat'
 import type { McpServerInfo } from '@/types/chat'
@@ -91,7 +93,61 @@ export function usePlanDialogApproval({
             }
           }
         )
+
+        // Optimistically clear waiting_for_input in sessions cache to prevent
+        // stale "waiting" status during the refetch window
+        queryClient.setQueryData<WorktreeSessions>(
+          chatQueryKeys.sessions(activeWorktreeId),
+          old => {
+            if (!old) return old
+            return {
+              ...old,
+              sessions: old.sessions.map(s =>
+                s.id === activeSessionId
+                  ? {
+                      ...s,
+                      waiting_for_input: false,
+                      pending_plan_message_id: undefined,
+                      waiting_for_input_type: undefined,
+                    }
+                  : s
+              ),
+            }
+          }
+        )
+
+        queryClient.invalidateQueries({
+          queryKey: chatQueryKeys.sessions(activeWorktreeId),
+        })
       }
+
+      // Clear Zustand waiting state so the queue processor can process the message
+      const {
+        enqueueMessage,
+        setExecutionMode,
+        setWaitingForInput,
+        setPendingPlanMessageId,
+        clearToolCalls,
+        clearStreamingContentBlocks,
+        setSessionReviewing,
+      } = useChatStore.getState()
+
+      setWaitingForInput(activeSessionId, false)
+      setPendingPlanMessageId(activeSessionId, null)
+      clearToolCalls(activeSessionId)
+      clearStreamingContentBlocks(activeSessionId)
+      setSessionReviewing(activeSessionId, false)
+
+      // Persist cleared waiting state to backend so refetch loads correct data
+      invoke('update_session_state', {
+        worktreeId: activeWorktreeId,
+        worktreePath: activeWorktreePath,
+        sessionId: activeSessionId,
+        waitingForInput: false,
+        waitingForInputType: null,
+      }).catch(err => {
+        console.error('[usePlanDialogApproval] Failed to clear waiting state:', err)
+      })
 
       // Build approval message
       const defaultText =
@@ -102,8 +158,6 @@ export function usePlanDialogApproval({
         ? `I've updated the plan. Please review and execute:\n\n<updated-plan>\n${updatedPlan}\n</updated-plan>`
         : defaultText
 
-      // Queue instead of immediate execution
-      const { enqueueMessage, setExecutionMode } = useChatStore.getState()
       setExecutionMode(activeSessionId, mode)
 
       const modelOverride = mode === 'yolo' ? yoloModelRef.current : buildModelRef.current

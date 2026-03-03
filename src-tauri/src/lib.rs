@@ -83,7 +83,7 @@ pub struct AppPreferences {
     #[serde(default = "default_effort_level")]
     pub default_effort_level: String, // Effort level for Opus 4.6: low, medium, high, max
     #[serde(default = "default_terminal")]
-    pub terminal: String, // Terminal app: terminal, warp, ghostty
+    pub terminal: String, // Terminal app: terminal, warp, ghostty, iterm2
     #[serde(default = "default_editor")]
     pub editor: String, // Editor app: zed, vscode, cursor, xcode
     #[serde(default = "default_open_in")]

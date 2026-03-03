@@ -84,6 +84,7 @@ export const ChatInput = memo(function ChatInput({
   const [fileMentionAnchor, setFileMentionAnchor] = useState<{
     top: number
     left: number
+    containerWidth: number
   } | null>(null)
   const [atTriggerIndex, setAtTriggerIndex] = useState<number | null>(null)
 
@@ -246,7 +247,7 @@ export const ChatInput = memo(function ChatInput({
           setFileMentionOpen(true)
 
           // Anchor at the top-left of the form so popover appears above the input
-          setFileMentionAnchor({ top: 0, left: 16 })
+          setFileMentionAnchor({ top: 0, left: 0, containerWidth: formRef.current?.offsetWidth ?? 0 })
         }
       } else if (atTriggerIndex !== null && fileMentionOpen) {
         // Continuing to type after @, update query
@@ -281,7 +282,7 @@ export const ChatInput = memo(function ChatInput({
               setFileMentionQuery(query)
               setFileMentionOpen(true)
               // Anchor at the top-left of the form so popover appears above the input
-              setFileMentionAnchor({ top: 0, left: 16 })
+              setFileMentionAnchor({ top: 0, left: 0, containerWidth: formRef.current?.offsetWidth ?? 0 })
             }
             break
           }
@@ -965,7 +966,7 @@ export const ChatInput = memo(function ChatInput({
         onSelectFile={handleFileSelect}
         searchQuery={fileMentionQuery}
         anchorPosition={fileMentionAnchor}
-        containerRef={formRef}
+        containerWidth={fileMentionAnchor?.containerWidth}
         handleRef={fileMentionHandleRef}
       />
 

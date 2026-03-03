@@ -784,7 +784,7 @@ export interface AppPreferences {
   selected_model: ClaudeModel // Claude model ID passed to --model flag
   thinking_level: ThinkingLevel // Thinking level: 'off' | 'think' | 'megathink' | 'ultrathink'
   default_effort_level: EffortLevel // Effort level for Opus 4.6 adaptive thinking: 'low' | 'medium' | 'high' | 'max'
-  terminal: TerminalApp // Terminal app: 'terminal' | 'warp' | 'ghostty'
+  terminal: TerminalApp // Terminal app: 'terminal' | 'warp' | 'ghostty' | 'iterm2'
   editor: EditorApp // Editor app: 'zed' | 'vscode' | 'cursor' | 'xcode'
   open_in: OpenInDefault // Default Open In action: 'editor' | 'terminal' | 'finder' | 'github'
   auto_branch_naming: boolean // Automatically generate branch names from first message
@@ -1039,6 +1039,7 @@ export type TerminalApp =
   | 'terminal'
   | 'warp'
   | 'ghostty'
+  | 'iterm2'
   | 'windows-terminal'
   | 'powershell'
   | 'cmd'
@@ -1054,6 +1055,7 @@ export const terminalOptions: { value: TerminalApp; label: string }[] =
         { value: 'terminal', label: 'Terminal' },
         { value: 'warp', label: 'Warp' },
         { value: 'ghostty', label: 'Ghostty' },
+        { value: 'iterm2', label: 'iTerm2' },
       ]
 
 export type EditorApp = 'zed' | 'vscode' | 'cursor' | 'xcode'

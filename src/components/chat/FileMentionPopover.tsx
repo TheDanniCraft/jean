@@ -42,8 +42,8 @@ interface FileMentionPopoverProps {
   searchQuery: string
   /** Position for the anchor (relative to textarea container) */
   anchorPosition: { top: number; left: number } | null
-  /** Reference to the container for positioning (reserved for future use) */
-  containerRef?: React.RefObject<HTMLElement | null>
+  /** Width of the container (textarea) for popover sizing */
+  containerWidth?: number
   /** Ref to expose navigation methods to parent */
   handleRef?: React.RefObject<FileMentionPopoverHandle | null>
 }
@@ -55,6 +55,7 @@ export function FileMentionPopover({
   onSelectFile,
   searchQuery,
   anchorPosition,
+  containerWidth,
   handleRef,
 }: FileMentionPopoverProps) {
   const queryClient = useQueryClient()
@@ -130,16 +131,20 @@ export function FileMentionPopover({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor
+        className="-mx-4 md:-mx-6"
         style={{
           position: 'absolute',
           top: anchorPosition.top,
-          left: anchorPosition.left,
+          left: 0,
+          right: 0,
           pointerEvents: 'none',
         }}
       />
       <PopoverContent
-        className="w-96 p-0"
+        className="p-0"
+        style={containerWidth ? { width: containerWidth } : undefined}
         align="start"
+        collisionPadding={0}
         side="top"
         sideOffset={12}
         onOpenAutoFocus={e => e.preventDefault()}

@@ -481,7 +481,7 @@ export const GeneralPane: React.FC = () => {
     }
 
     // Not authenticated, open login modal
-    const args = cliStatus.supports_auth_command ? ['auth', 'login'] : undefined
+    const args = cliStatus.supports_auth_command ? ['auth', 'login'] : ['login']
     openCliLoginModal('claude', cliStatus.path, args)
   }, [
     cliStatus?.path,

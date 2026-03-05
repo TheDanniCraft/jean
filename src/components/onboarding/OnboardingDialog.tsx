@@ -697,7 +697,7 @@ function OnboardingDialogContent() {
   const claudeLoginCommand = claudeSetup.status?.path ?? ''
   const claudeLoginArgs = claudeSetup.status?.supports_auth_command
     ? ['auth', 'login']
-    : undefined
+    : ['login']
 
   const codexLoginCommand = codexSetup.status?.path ?? ''
   const codexLoginArgs = ['login']

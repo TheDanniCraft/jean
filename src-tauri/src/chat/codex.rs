@@ -1,95 +1,16 @@
 //! Codex CLI execution engine
 //!
-//! Mirrors the Claude CLI execution pattern (claude.rs) but adapted for
-//! OpenAI's Codex CLI. Key differences:
-//! - Codex uses `exec --json` instead of `--print --output-format stream-json`
-//! - Prompt is passed as a positional argument, not piped via stdin
-//! - Resume uses `resume <thread_id>` positional args
-//! - Different JSONL event format (item.started/completed vs assistant/user/result)
-//! - No thinking/effort levels, no --settings, no --add-dir, no MCP config
+//! Uses `codex app-server` (a persistent JSON-RPC 2.0 server over stdio) for
+//! all chat interactions. Threads and turns are managed via JSON-RPC requests;
+//! streamed responses arrive as notifications and are mapped to Tauri events.
+//!
+//! One-shot operations (commit messages, PR content, etc.) still use `codex exec`
+//! directly since they don't need streaming.
 
 use super::types::{ContentBlock, PermissionDenial, PermissionDeniedEvent, ToolCall, UsageData};
 use crate::http_server::EmitExt;
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::sync::Mutex;
-
-// =============================================================================
-// Approval channel registry (for attached Codex processes in build mode)
-// =============================================================================
-
-/// Approval response sender per session. The Tauri command writes here,
-/// the tailer thread blocks on the receiver.
-#[allow(clippy::type_complexity)]
-static CODEX_APPROVAL_SENDERS: Mutex<
-    Option<HashMap<String, std::sync::mpsc::Sender<(u64, String)>>>,
-> = Mutex::new(None);
-
-/// Stdin handles for attached Codex processes, keyed by session_id.
-static CODEX_STDIN_HANDLES: Mutex<Option<HashMap<String, std::process::ChildStdin>>> =
-    Mutex::new(None);
-
-fn register_approval_channel(
-    session_id: &str,
-    sender: std::sync::mpsc::Sender<(u64, String)>,
-    stdin: std::process::ChildStdin,
-) {
-    let mut senders = CODEX_APPROVAL_SENDERS.lock().unwrap();
-    senders
-        .get_or_insert_with(HashMap::new)
-        .insert(session_id.to_string(), sender);
-    let mut handles = CODEX_STDIN_HANDLES.lock().unwrap();
-    handles
-        .get_or_insert_with(HashMap::new)
-        .insert(session_id.to_string(), stdin);
-}
-
-fn cleanup_approval_channel(session_id: &str) {
-    if let Ok(mut senders) = CODEX_APPROVAL_SENDERS.lock() {
-        if let Some(map) = senders.as_mut() {
-            map.remove(session_id);
-        }
-    }
-    if let Ok(mut handles) = CODEX_STDIN_HANDLES.lock() {
-        if let Some(map) = handles.as_mut() {
-            map.remove(session_id);
-        }
-    }
-}
-
-/// Send an approval decision to a waiting Codex process.
-/// Called from the `approve_codex_command` Tauri command.
-pub fn send_approval(session_id: &str, rpc_id: u64, decision: &str) -> Result<(), String> {
-    // Write the JSON-RPC response directly to stdin
-    let response = format!("{{\"id\":{rpc_id},\"result\":\"{decision}\"}}\n");
-    let mut handles = CODEX_STDIN_HANDLES
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    let map = handles.as_mut().ok_or("No stdin handles registered")?;
-    let stdin = map
-        .get_mut(session_id)
-        .ok_or_else(|| format!("No stdin handle for session {session_id}"))?;
-    stdin
-        .write_all(response.as_bytes())
-        .map_err(|e| format!("Failed to write to Codex stdin: {e}"))?;
-    stdin
-        .flush()
-        .map_err(|e| format!("Failed to flush Codex stdin: {e}"))?;
-
-    // Signal the tailer thread to resume
-    let senders = CODEX_APPROVAL_SENDERS
-        .lock()
-        .map_err(|e| format!("Lock error: {e}"))?;
-    if let Some(map) = senders.as_ref() {
-        if let Some(sender) = map.get(session_id) {
-            let _ = sender.send((rpc_id, decision.to_string()));
-        }
-    }
-
-    log::trace!("Sent approval for session {session_id}: rpc_id={rpc_id}, decision={decision}");
-    Ok(())
-}
 
 // =============================================================================
 // Response type (same shape as ClaudeResponse)
@@ -173,131 +94,148 @@ struct ErrorEvent {
 }
 
 // =============================================================================
-// Arg builder
+// App-server param builders
 // =============================================================================
 
-/// Build CLI arguments for Codex CLI.
-///
-/// Returns (args, env_vars).
+/// Build JSON-RPC params for `thread/start`.
 #[allow(clippy::too_many_arguments)]
-pub fn build_codex_args(
+pub fn build_thread_start_params(
     working_dir: &std::path::Path,
-    existing_thread_id: Option<&str>,
     model: Option<&str>,
     execution_mode: Option<&str>,
-    reasoning_effort: Option<&str>,
     search_enabled: bool,
-    add_dirs: &[String],
     instructions_file: Option<&std::path::Path>,
     multi_agent_enabled: bool,
     max_agent_threads: Option<u32>,
-) -> (Vec<String>, Vec<(String, String)>) {
-    let mut args = Vec::new();
-    let env_vars = Vec::new();
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "cwd": working_dir.to_string_lossy(),
+        "experimentalRawEvents": false,
+        "persistExtendedHistory": true,
+    });
 
-    // Core command
-    args.push("exec".to_string());
-    args.push("--json".to_string());
-
-    // Working directory
-    args.push("--cd".to_string());
-    args.push(working_dir.to_string_lossy().to_string());
-
-    // Model (only gpt-5.4-fast enables the fast service tier)
+    // Model (gpt-5.4-fast → model=gpt-5.4 + serviceTier=fast)
     if let Some(m) = model {
         let (actual_model, is_fast) = match m {
             "gpt-5.4-fast" => ("gpt-5.4", true),
             other => (other.strip_suffix("-fast").unwrap_or(other), false),
         };
-        args.push("--model".to_string());
-        args.push(actual_model.to_string());
+        params["model"] = serde_json::json!(actual_model);
         if is_fast {
-            args.push("-c".to_string());
-            args.push("service_tier=\"fast\"".to_string());
+            params["serviceTier"] = serde_json::json!("fast");
         }
     }
 
     // Permission mode mapping
     match execution_mode.unwrap_or("plan") {
         "build" => {
-            // Use untrusted approval mode: Codex pauses for approval before commands.
-            // We respond via JSON-RPC on stdin (requires attached process).
-            // File changes are auto-accepted; only bash commands prompt the user.
-            // `codex exec` doesn't accept --ask-for-approval directly;
-            // use -c config override instead.
-            args.push("-c".to_string());
-            args.push("approval_policy=\"untrusted\"".to_string());
-            args.push("--sandbox".to_string());
-            args.push("workspace-write".to_string());
+            params["approvalPolicy"] = serde_json::json!("untrusted");
+            params["sandbox"] = serde_json::json!("workspace-write");
         }
         "yolo" => {
-            args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            params["approvalPolicy"] = serde_json::json!("never");
+            params["sandbox"] = serde_json::json!("danger-full-access");
         }
-        // "plan" or default: enforce read-only sandbox explicitly
-        // (Codex defaults to workspace-write in git repos, NOT read-only)
+        // "plan" or default: read-only sandbox
         _ => {
-            args.push("-s".to_string());
-            args.push("read-only".to_string());
+            params["sandbox"] = serde_json::json!("read-only");
         }
     }
 
-    // Reasoning effort
-    if let Some(effort) = reasoning_effort {
-        args.push("-c".to_string());
-        args.push(format!("model_reasoning_effort=\"{effort}\""));
-    }
+    // Config overrides
+    let mut config = serde_json::Map::new();
 
-    // Web search: use -c config override (--search is interactive-only)
-    // Values: "live" (real-time), "cached" (default), "disabled"
-    args.push("-c".to_string());
-    if search_enabled {
-        args.push("web_search=\"live\"".to_string());
-    } else {
-        args.push("web_search=\"disabled\"".to_string());
-    }
+    // Web search
+    config.insert(
+        "web_search".to_string(),
+        serde_json::json!(if search_enabled { "live" } else { "disabled" }),
+    );
 
-    // Additional directories (pasted images, context files, etc.)
-    for dir in add_dirs {
-        args.push("--add-dir".to_string());
-        args.push(dir.clone());
-    }
-
-    // Custom instructions file (system prompt equivalent)
+    // Custom instructions file
     if let Some(path) = instructions_file {
-        args.push("-c".to_string());
-        args.push(format!(
-            "experimental_instructions_file=\"{}\"",
-            path.to_string_lossy()
-        ));
+        config.insert(
+            "experimental_instructions_file".to_string(),
+            serde_json::json!(path.to_string_lossy()),
+        );
     }
 
-    // Multi-agent: enable sub-agent collaboration tools
+    // Multi-agent
     if multi_agent_enabled {
-        args.push("-c".to_string());
-        args.push("features.multi_agent=true".to_string());
+        let mut features = serde_json::Map::new();
+        features.insert("multi_agent".to_string(), serde_json::json!(true));
+        config.insert("features".to_string(), serde_json::Value::Object(features));
         if let Some(threads) = max_agent_threads {
-            args.push("-c".to_string());
-            args.push(format!("agents.max_threads={threads}"));
+            let mut agents = serde_json::Map::new();
+            agents.insert("max_threads".to_string(), serde_json::json!(threads));
+            config.insert("agents".to_string(), serde_json::Value::Object(agents));
         }
     }
 
-    // Resume: positional args after all flags
-    if let Some(thread_id) = existing_thread_id {
-        args.push("resume".to_string());
-        args.push(thread_id.to_string());
+    if !config.is_empty() {
+        params["config"] = serde_json::Value::Object(config);
     }
 
-    (args, env_vars)
+    params
+}
+
+/// Build JSON-RPC params for `turn/start`.
+pub fn build_turn_start_params(
+    thread_id: &str,
+    prompt: &str,
+    working_dir: &std::path::Path,
+    execution_mode: Option<&str>,
+    reasoning_effort: Option<&str>,
+    add_dirs: &[String],
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "threadId": thread_id,
+        "input": [{
+            "type": "text",
+            "text": prompt,
+            "text_elements": [],
+        }],
+    });
+
+    // Reasoning effort (per-turn override)
+    if let Some(effort) = reasoning_effort {
+        params["effort"] = serde_json::json!(effort);
+    }
+
+    // Sandbox policy with writable roots (for build/yolo modes with add_dirs)
+    let mode = execution_mode.unwrap_or("plan");
+    if mode == "build" && !add_dirs.is_empty() {
+        let mut writable_roots: Vec<serde_json::Value> = vec![
+            serde_json::json!(working_dir.to_string_lossy()),
+        ];
+        for dir in add_dirs {
+            writable_roots.push(serde_json::json!(dir));
+        }
+        params["sandboxPolicy"] = serde_json::json!({
+            "type": "workspaceWrite",
+            "writableRoots": writable_roots,
+            "readOnlyAccess": { "type": "fullAccess" },
+            "networkAccess": false,
+            "excludeTmpdirEnvVar": false,
+            "excludeSlashTmp": false,
+        });
+    }
+
+    // Override cwd per turn
+    params["cwd"] = serde_json::json!(working_dir.to_string_lossy());
+
+    params
 }
 
 // =============================================================================
-// Execution (detached or attached depending on mode)
+// Execution via app-server
 // =============================================================================
 
-/// Execute Codex CLI. In build mode, uses an attached process for interactive
-/// approval support. In plan/yolo mode, uses a detached process.
+/// Execute a Codex chat message via the persistent app-server.
+///
+/// Handles thread creation/resume, turn execution, event mapping, and approvals.
+/// Returns the same CodexResponse as the old exec path for compatibility.
 #[allow(clippy::too_many_arguments)]
-pub fn execute_codex_detached(
+pub fn execute_codex_via_server(
     app: &tauri::AppHandle,
     session_id: &str,
     worktree_id: &str,
@@ -309,1001 +247,271 @@ pub fn execute_codex_detached(
     reasoning_effort: Option<&str>,
     search_enabled: bool,
     add_dirs: &[String],
-    prompt: Option<&str>,
+    prompt: &str,
     instructions_file: Option<&std::path::Path>,
     multi_agent_enabled: bool,
     max_agent_threads: Option<u32>,
-    pid_callback: Option<Box<dyn FnOnce(u32) + Send>>,
-) -> Result<(u32, CodexResponse), String> {
-    use crate::codex_cli::resolve_cli_binary;
+) -> Result<CodexResponse, String> {
+    use super::codex_server;
 
-    let cli_path = resolve_cli_binary(app);
+    let is_plan_mode = execution_mode.unwrap_or("plan") == "plan";
+    let is_build_mode = execution_mode.unwrap_or("plan") == "build";
 
-    if !cli_path.exists() {
-        let error_msg = format!(
-            "Codex CLI not found at {}. Please install it in Settings > General.",
-            cli_path.display()
+    // Ensure the app-server is running
+    codex_server::ensure_running(app)?;
+
+    // Start or resume thread
+    let thread_id = if let Some(tid) = existing_thread_id {
+        // Resume existing thread
+        let resume_params = build_thread_start_params(
+            working_dir,
+            model,
+            execution_mode,
+            search_enabled,
+            instructions_file,
+            multi_agent_enabled,
+            max_agent_threads,
         );
-        log::error!("{error_msg}");
-        let _ = app.emit_all(
-            "chat:error",
-            &ErrorEvent {
-                session_id: session_id.to_string(),
-                worktree_id: worktree_id.to_string(),
-                error: error_msg.clone(),
-            },
-        );
-        return Err(error_msg);
-    }
+        let mut full_params = serde_json::json!({ "threadId": tid, "persistExtendedHistory": true });
+        // Copy overridable fields
+        for key in &["model", "cwd", "approvalPolicy", "sandbox", "config", "serviceTier"] {
+            if let Some(v) = resume_params.get(key) {
+                full_params[key] = v.clone();
+            }
+        }
+        match codex_server::send_request("thread/resume", full_params) {
+            Ok(_) => tid.to_string(),
+            Err(e) => {
+                log::warn!("Failed to resume thread {tid}: {e}, starting new thread");
+                start_new_thread(working_dir, model, execution_mode, search_enabled, instructions_file, multi_agent_enabled, max_agent_threads)?
+            }
+        }
+    } else {
+        start_new_thread(working_dir, model, execution_mode, search_enabled, instructions_file, multi_agent_enabled, max_agent_threads)?
+    };
 
-    // Build args
-    let (args, env_vars) = build_codex_args(
+    // Build turn params
+    let turn_params = build_turn_start_params(
+        &thread_id,
+        prompt,
         working_dir,
-        existing_thread_id,
-        model,
         execution_mode,
         reasoning_effort,
-        search_enabled,
         add_dirs,
+    );
+
+    // Set up event channel for this session
+    let (event_tx, event_rx) = std::sync::mpsc::channel();
+    let ctx = codex_server::SessionContext {
+        session_id: session_id.to_string(),
+        worktree_id: worktree_id.to_string(),
+        event_tx,
+    };
+    codex_server::register_session(&thread_id, ctx);
+
+    // Register turn for cancellation
+    // We don't have the turn_id yet — register with empty, update after turn/started
+    super::registry::register_codex_turn(session_id.to_string(), thread_id.clone(), String::new());
+
+    // Start the turn
+    let turn_response = codex_server::send_request("turn/start", turn_params);
+    if let Err(e) = &turn_response {
+        codex_server::unregister_session(&thread_id);
+        super::registry::unregister_codex_turn(session_id);
+        return Err(format!("Failed to start turn: {e}"));
+    }
+
+    // Process events until turn completes
+    super::increment_tailer_count();
+    let response = process_turn_events(
+        app,
+        session_id,
+        worktree_id,
+        &thread_id,
+        output_file,
+        is_plan_mode,
+        is_build_mode,
+        &event_rx,
+    );
+    super::decrement_tailer_count();
+
+    // Cleanup
+    codex_server::unregister_session(&thread_id);
+    super::registry::unregister_codex_turn(session_id);
+
+    // Set the thread_id on the response
+    let mut resp = response;
+    if resp.thread_id.is_empty() {
+        resp.thread_id = thread_id;
+    }
+
+    Ok(resp)
+}
+
+/// Start a new Codex thread via app-server.
+fn start_new_thread(
+    working_dir: &std::path::Path,
+    model: Option<&str>,
+    execution_mode: Option<&str>,
+    search_enabled: bool,
+    instructions_file: Option<&std::path::Path>,
+    multi_agent_enabled: bool,
+    max_agent_threads: Option<u32>,
+) -> Result<String, String> {
+    use super::codex_server;
+
+    let params = build_thread_start_params(
+        working_dir,
+        model,
+        execution_mode,
+        search_enabled,
         instructions_file,
         multi_agent_enabled,
         max_agent_threads,
     );
 
-    log::debug!(
-        "Codex CLI command: {} {}",
-        cli_path.display(),
-        args.join(" ")
-    );
+    let result = codex_server::send_request("thread/start", params)?;
+    let thread_id = result
+        .get("thread")
+        .and_then(|t| t.get("id"))
+        .and_then(|v| v.as_str())
+        .ok_or("thread/start response missing thread.id")?
+        .to_string();
 
-    let is_build_mode = execution_mode.unwrap_or("plan") == "build";
-
-    if is_build_mode {
-        // Attached process: bidirectional stdin/stdout for approval protocol
-        execute_codex_attached(
-            app,
-            session_id,
-            worktree_id,
-            output_file,
-            &cli_path,
-            &args,
-            &env_vars,
-            working_dir,
-            prompt,
-            existing_thread_id.is_some(),
-        )
-    } else {
-        let is_plan_mode = execution_mode.unwrap_or("plan") == "plan";
-        // Detached process: file-based tailing (plan/yolo modes)
-        execute_codex_detached_inner(
-            app,
-            session_id,
-            worktree_id,
-            output_file,
-            &cli_path,
-            &args,
-            &env_vars,
-            working_dir,
-            prompt,
-            pid_callback,
-            is_plan_mode,
-        )
-    }
+    log::info!("Started new Codex thread: {thread_id}");
+    Ok(thread_id)
 }
 
-/// Detached execution path (plan/yolo modes).
+/// Process turn events from the app-server, emitting Tauri events.
 #[allow(clippy::too_many_arguments)]
-fn execute_codex_detached_inner(
+fn process_turn_events(
     app: &tauri::AppHandle,
     session_id: &str,
     worktree_id: &str,
+    thread_id: &str,
     output_file: &std::path::Path,
-    cli_path: &std::path::Path,
-    args: &[String],
-    env_vars: &[(String, String)],
-    working_dir: &std::path::Path,
-    prompt: Option<&str>,
-    pid_callback: Option<Box<dyn FnOnce(u32) + Send>>,
     is_plan_mode: bool,
-) -> Result<(u32, CodexResponse), String> {
-    use super::detached::spawn_detached_codex;
-
-    log::trace!("Executing Codex CLI (detached) for session: {session_id}");
-
-    let env_refs: Vec<(&str, &str)> = env_vars
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-
-    let pid = spawn_detached_codex(cli_path, args, prompt, output_file, working_dir, &env_refs)
-        .map_err(|e| {
-            let error_msg = format!("Failed to start Codex CLI: {e}");
-            log::error!("{error_msg}");
-            let _ = app.emit_all(
-                "chat:error",
-                &ErrorEvent {
-                    session_id: session_id.to_string(),
-                    worktree_id: worktree_id.to_string(),
-                    error: error_msg.clone(),
-                },
-            );
-            error_msg
-        })?;
-
-    log::trace!("Detached Codex CLI spawned with PID: {pid}");
-
-    // Persist PID to metadata immediately (before tailing) for crash recovery
-    if let Some(cb) = pid_callback {
-        cb(pid);
-    }
-
-    if !super::registry::register_process(session_id.to_string(), pid) {
-        // Process was killed by pending cancel — return cancelled response
-        return Ok((
-            pid,
-            CodexResponse {
-                content: String::new(),
-                thread_id: String::new(),
-                tool_calls: vec![],
-                content_blocks: vec![],
-                cancelled: true,
-                error_emitted: false,
-                usage: None,
-            },
-        ));
-    }
-
-    super::increment_tailer_count();
-    let response =
-        match tail_codex_output(app, session_id, worktree_id, output_file, pid, is_plan_mode) {
-            Ok(resp) => {
-                super::decrement_tailer_count();
-                super::registry::unregister_process(session_id);
-                resp
-            }
-            Err(e) => {
-                super::decrement_tailer_count();
-                super::registry::unregister_process(session_id);
-                return Err(e);
-            }
-        };
-
-    Ok((pid, response))
-}
-
-/// Attached execution path (build mode — interactive approvals).
-///
-/// Spawns Codex with piped stdin/stdout so we can respond to JSON-RPC
-/// approval requests. Stdout is also tee'd to the output file for history.
-#[allow(clippy::too_many_arguments)]
-fn execute_codex_attached(
-    app: &tauri::AppHandle,
-    session_id: &str,
-    worktree_id: &str,
-    output_file: &std::path::Path,
-    cli_path: &std::path::Path,
-    args: &[String],
-    env_vars: &[(String, String)],
-    working_dir: &std::path::Path,
-    prompt: Option<&str>,
-    is_resume: bool,
-) -> Result<(u32, CodexResponse), String> {
-    use std::io::BufRead;
-    use std::process::Stdio;
-
-    log::trace!("Executing Codex CLI (attached) for session: {session_id}");
-
-    let mut cmd = crate::platform::silent_command(cli_path);
-    cmd.args(args)
-        .current_dir(working_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    for (key, value) in env_vars {
-        cmd.env(key, value);
-    }
-
-    // For first message: add prompt as positional arg (not resume)
-    // For resume: prompt is piped via stdin
-    if !is_resume {
-        if let Some(p) = prompt {
-            cmd.arg(p);
-        }
-    }
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn Codex CLI (attached): {e}"))?;
-
-    let pid = child.id();
-    log::trace!("Attached Codex CLI spawned with PID: {pid}");
-
-    // For resume: write prompt to stdin (but don't close it — keep open for approvals)
-    if is_resume {
-        if let Some(p) = prompt {
-            if let Some(ref mut stdin) = child.stdin {
-                stdin
-                    .write_all(p.as_bytes())
-                    .map_err(|e| format!("Failed to write prompt to stdin: {e}"))?;
-                stdin
-                    .write_all(b"\n")
-                    .map_err(|e| format!("Failed to write newline to stdin: {e}"))?;
-                stdin
-                    .flush()
-                    .map_err(|e| format!("Failed to flush stdin: {e}"))?;
-            }
-        }
-    }
-
-    // Take stdin for the approval channel
-    let stdin_handle = child
-        .stdin
-        .take()
-        .ok_or("Failed to take stdin from child process")?;
-
-    // Set up approval channel
-    let (approval_tx, approval_rx) = std::sync::mpsc::channel::<(u64, String)>();
-    register_approval_channel(session_id, approval_tx, stdin_handle);
-
-    // Register process for cancellation (returns false if pending cancel exists)
-    if !super::registry::register_process(session_id.to_string(), pid) {
-        cleanup_approval_channel(session_id);
-        return Ok((
-            pid,
-            CodexResponse {
-                content: String::new(),
-                thread_id: String::new(),
-                tool_calls: vec![],
-                content_blocks: vec![],
-                cancelled: true,
-                error_emitted: false,
-                usage: None,
-            },
-        ));
-    }
-
-    // Take stdout for reading
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("Failed to take stdout from child process")?;
-    let reader = std::io::BufReader::new(stdout);
-
-    // Spawn stderr reader to capture errors
-    let stderr = child.stderr.take();
-    let stderr_session_id = session_id.to_string();
-    let stderr_handle = std::thread::spawn(move || {
-        let mut error_lines = Vec::new();
-        if let Some(stderr) = stderr {
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines() {
-                match line {
-                    Ok(l) if !l.trim().is_empty() => {
-                        log::trace!("Codex stderr ({stderr_session_id}): {l}");
-                        error_lines.push(l);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        error_lines
-    });
-
-    // Tail stdout directly
-    super::increment_tailer_count();
-    let response = match tail_codex_attached(
-        app,
-        session_id,
-        worktree_id,
-        output_file,
-        reader,
-        &approval_rx,
-    ) {
-        Ok(resp) => {
-            super::decrement_tailer_count();
-            super::registry::unregister_process(session_id);
-            cleanup_approval_channel(session_id);
-            resp
-        }
-        Err(e) => {
-            super::decrement_tailer_count();
-            super::registry::unregister_process(session_id);
-            cleanup_approval_channel(session_id);
-            return Err(e);
-        }
-    };
-
-    // Wait for child to finish (non-blocking if already done)
-    let _ = child.wait();
-
-    // Check stderr for errors
-    if response.content.is_empty() && !response.cancelled {
-        if let Ok(error_lines) = stderr_handle.join() {
-            if !error_lines.is_empty() {
-                let error_text = error_lines.join("\n");
-                log::warn!("Codex CLI stderr for session {session_id}: {error_text}");
-                let _ = app.emit_all(
-                    "chat:error",
-                    &ErrorEvent {
-                        session_id: session_id.to_string(),
-                        worktree_id: worktree_id.to_string(),
-                        error: format!("Codex CLI failed: {error_text}"),
-                    },
-                );
-            }
-        }
-    }
-
-    Ok((pid, response))
-}
-
-// =============================================================================
-// Attached stdout tailing (build mode — with approval support)
-// =============================================================================
-
-/// Tail Codex stdout from an attached process, handling JSON-RPC approval requests.
-///
-/// Reads JSONL line-by-line from stdout. When an approval request arrives:
-/// - `item/fileChange/requestApproval` → auto-accept (build mode = acceptEdits)
-/// - `item/commandExecution/requestApproval` → emit `chat:permission_denied`, block until response
-///
-/// Also writes each line to the output file for history/replay.
-fn tail_codex_attached(
-    app: &tauri::AppHandle,
-    session_id: &str,
-    worktree_id: &str,
-    output_file: &std::path::Path,
-    reader: std::io::BufReader<std::process::ChildStdout>,
-    approval_rx: &std::sync::mpsc::Receiver<(u64, String)>,
-) -> Result<CodexResponse, String> {
-    use std::io::BufRead;
+    is_build_mode: bool,
+    event_rx: &std::sync::mpsc::Receiver<super::codex_server::ServerEvent>,
+) -> CodexResponse {
+    use super::codex_server::ServerEvent;
+    use std::io::Write;
     use std::time::Duration;
 
-    log::trace!("Starting attached Codex tailing for session: {session_id}");
-
-    let mut output_writer = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(output_file)
-        .map_err(|e| format!("Failed to open output file for writing: {e}"))?;
-
     let mut full_content = String::new();
-    let mut thread_id = String::new();
+    let mut response_thread_id = thread_id.to_string();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut content_blocks: Vec<ContentBlock> = Vec::new();
+    let mut pending_tool_ids: HashMap<String, String> = HashMap::new();
     let mut completed = false;
     let mut cancelled = false;
     let mut error_emitted = false;
     let mut usage: Option<UsageData> = None;
-    let mut pending_tool_ids: HashMap<String, String> = HashMap::new();
 
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(l) => l,
-            Err(e) => {
-                log::trace!("Error reading Codex stdout: {e}");
-                break;
-            }
-        };
+    // Open output file for history
+    let mut output_writer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(output_file)
+        .ok();
 
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        // Write to output file for history
-        let _ = writeln!(output_writer, "{line}");
-
-        if line.contains("\"_run_meta\"") {
-            continue;
-        }
-
-        let msg: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(e) => {
-                log::trace!("Failed to parse Codex line as JSON: {e}");
-                continue;
-            }
-        };
-
-        // Check for cancellation
-        if !super::registry::is_process_running(session_id) {
-            log::trace!("Session {session_id} cancelled externally, stopping attached tail");
-            cancelled = true;
-            break;
-        }
-
-        // Check for JSON-RPC approval requests (have "method" field, no "type" field)
-        if let Some(method) = msg.get("method").and_then(|v| v.as_str()) {
-            let rpc_id = msg.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
-            let params = msg.get("params").unwrap_or(&serde_json::Value::Null);
-
-            match method {
-                "item/fileChange/requestApproval" => {
-                    // Auto-accept file changes in build mode
-                    log::trace!("Auto-accepting file change (rpc_id={rpc_id})");
-                    send_approval(session_id, rpc_id, "accept").unwrap_or_else(|e| {
-                        log::error!("Failed to auto-accept file change: {e}");
-                    });
-                }
-                "item/commandExecution/requestApproval" => {
-                    let command_parts = params
-                        .get("command")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .unwrap_or_default();
-                    let item_id = params
-                        .get("itemId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    log::trace!("Command approval requested (rpc_id={rpc_id}): {command_parts}");
-
-                    let denial = PermissionDenial {
-                        tool_name: "Bash".to_string(),
-                        tool_use_id: item_id,
-                        tool_input: serde_json::json!({ "command": command_parts }),
-                        rpc_id: Some(rpc_id),
-                    };
-
-                    let event = PermissionDeniedEvent {
-                        session_id: session_id.to_string(),
-                        worktree_id: worktree_id.to_string(),
-                        denials: vec![denial],
-                    };
-
-                    if let Err(e) = app.emit_all("chat:permission_denied", &event) {
-                        log::error!("Failed to emit permission_denied: {e}");
-                    }
-
-                    // Block until frontend responds via approve_codex_command
-                    log::trace!("Blocking on approval response for rpc_id={rpc_id}...");
-                    loop {
-                        if !super::registry::is_process_running(session_id) {
-                            log::trace!("Session cancelled while waiting for approval");
-                            cancelled = true;
-                            break;
-                        }
-                        match approval_rx.recv_timeout(Duration::from_millis(200)) {
-                            Ok((id, _decision)) => {
-                                log::trace!("Received approval response: rpc_id={id}");
-                                break;
-                            }
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                log::trace!("Approval channel disconnected");
-                                cancelled = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if cancelled {
-                        break;
-                    }
-                }
-                _ => {
-                    log::trace!("Unknown JSON-RPC method: {method}");
-                }
-            }
-            continue;
-        }
-
-        // Standard event processing
-        let event_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-        match event_type {
-            "thread.started" => {
-                if let Some(tid) = msg.get("thread_id").and_then(|v| v.as_str()) {
-                    thread_id = tid.to_string();
-                    log::trace!("Codex thread started: {thread_id}");
-                }
-            }
-
-            "item.started" => {
-                let item = msg.get("item").unwrap_or(&serde_json::Value::Null);
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-
-                match item_type {
-                    "command_execution" => {
-                        let command = item.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                        let tool_id = if item_id.is_empty() {
-                            uuid::Uuid::new_v4().to_string()
-                        } else {
-                            item_id.to_string()
-                        };
-                        tool_calls.push(ToolCall {
-                            id: tool_id.clone(),
-                            name: "Bash".to_string(),
-                            input: serde_json::json!({ "command": command }),
-                            output: None,
-                            parent_tool_use_id: None,
-                        });
-                        content_blocks.push(ContentBlock::ToolUse {
-                            tool_call_id: tool_id.clone(),
-                        });
-                        if !item_id.is_empty() {
-                            pending_tool_ids.insert(item_id.to_string(), tool_id.clone());
-                        }
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name: "Bash".to_string(),
-                                input: serde_json::json!({ "command": command }),
-                                parent_tool_use_id: None,
-                            },
-                        );
-                        let _ = app.emit_all(
-                            "chat:tool_block",
-                            &ToolBlockEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                tool_call_id: tool_id,
-                            },
-                        );
-                    }
-                    "file_change" => {
-                        let tool_id = if item_id.is_empty() {
-                            uuid::Uuid::new_v4().to_string()
-                        } else {
-                            item_id.to_string()
-                        };
-                        let changes = item
-                            .get("changes")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
-                        tool_calls.push(ToolCall {
-                            id: tool_id.clone(),
-                            name: "FileChange".to_string(),
-                            input: changes.clone(),
-                            output: None,
-                            parent_tool_use_id: None,
-                        });
-                        content_blocks.push(ContentBlock::ToolUse {
-                            tool_call_id: tool_id.clone(),
-                        });
-                        if !item_id.is_empty() {
-                            pending_tool_ids.insert(item_id.to_string(), tool_id.clone());
-                        }
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name: "FileChange".to_string(),
-                                input: changes,
-                                parent_tool_use_id: None,
-                            },
-                        );
-                        let _ = app.emit_all(
-                            "chat:tool_block",
-                            &ToolBlockEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                tool_call_id: tool_id,
-                            },
-                        );
-                    }
-                    "mcp_tool_call" => {
-                        let server = item
-                            .get("server")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let tool = item
-                            .get("tool")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let arguments = item
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null);
-                        let tool_id = if item_id.is_empty() {
-                            uuid::Uuid::new_v4().to_string()
-                        } else {
-                            item_id.to_string()
-                        };
-                        let name = format!("mcp:{server}:{tool}");
-                        tool_calls.push(ToolCall {
-                            id: tool_id.clone(),
-                            name: name.clone(),
-                            input: arguments.clone(),
-                            output: None,
-                            parent_tool_use_id: None,
-                        });
-                        content_blocks.push(ContentBlock::ToolUse {
-                            tool_call_id: tool_id.clone(),
-                        });
-                        if !item_id.is_empty() {
-                            pending_tool_ids.insert(item_id.to_string(), tool_id.clone());
-                        }
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name,
-                                input: arguments,
-                                parent_tool_use_id: None,
-                            },
-                        );
-                        let _ = app.emit_all(
-                            "chat:tool_block",
-                            &ToolBlockEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                tool_call_id: tool_id,
-                            },
-                        );
-                    }
-                    // Multi-agent collab tools (spawn_agent, send_input, wait, close_agent)
-                    "collab_tool_call" => {
-                        let collab_tool = item
-                            .get("tool")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let tool_name = match collab_tool {
-                            "spawn_agent" => "SpawnAgent",
-                            "send_input" => "SendInput",
-                            "wait" => "WaitForAgents",
-                            "close_agent" => "CloseAgent",
-                            _ => collab_tool,
-                        };
-                        let tool_id = if item_id.is_empty() {
-                            uuid::Uuid::new_v4().to_string()
-                        } else {
-                            item_id.to_string()
-                        };
-                        let input = item.clone();
-                        tool_calls.push(ToolCall {
-                            id: tool_id.clone(),
-                            name: tool_name.to_string(),
-                            input: input.clone(),
-                            output: None,
-                            parent_tool_use_id: None,
-                        });
-                        content_blocks.push(ContentBlock::ToolUse {
-                            tool_call_id: tool_id.clone(),
-                        });
-                        if !item_id.is_empty() {
-                            pending_tool_ids.insert(item_id.to_string(), tool_id.clone());
-                        }
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name: tool_name.to_string(),
-                                input,
-                                parent_tool_use_id: None,
-                            },
-                        );
-                        let _ = app.emit_all(
-                            "chat:tool_block",
-                            &ToolBlockEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                tool_call_id: tool_id,
-                            },
-                        );
-                    }
-                    // Codex todo/plan list
-                    "todo_list" => {
-                        let tool_id = if item_id.is_empty() {
-                            uuid::Uuid::new_v4().to_string()
-                        } else {
-                            item_id.to_string()
-                        };
-                        let input = item.clone();
-                        tool_calls.push(ToolCall {
-                            id: tool_id.clone(),
-                            name: "CodexTodoList".to_string(),
-                            input: input.clone(),
-                            output: None,
-                            parent_tool_use_id: None,
-                        });
-                        content_blocks.push(ContentBlock::ToolUse {
-                            tool_call_id: tool_id.clone(),
-                        });
-                        if !item_id.is_empty() {
-                            pending_tool_ids.insert(item_id.to_string(), tool_id.clone());
-                        }
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name: "CodexTodoList".to_string(),
-                                input,
-                                parent_tool_use_id: None,
-                            },
-                        );
-                        let _ = app.emit_all(
-                            "chat:tool_block",
-                            &ToolBlockEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                tool_call_id: tool_id,
-                            },
-                        );
-                    }
-                    other => {
-                        log::debug!("Unknown Codex item.started type: {other}");
-                    }
-                }
-            }
-
-            "item.completed" => {
-                let item = msg.get("item").unwrap_or(&serde_json::Value::Null);
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-
-                match item_type {
-                    "agent_message" => {
-                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() {
-                                full_content.push_str(text);
-                                content_blocks.push(ContentBlock::Text {
-                                    text: text.to_string(),
-                                });
-                                let _ = app.emit_all(
-                                    "chat:chunk",
-                                    &ChunkEvent {
-                                        session_id: session_id.to_string(),
-                                        worktree_id: worktree_id.to_string(),
-                                        content: text.to_string(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    "command_execution" => {
-                        let output = item
-                            .get("aggregated_output")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let tool_id = pending_tool_ids.remove(item_id).unwrap_or_default();
-                        if !tool_id.is_empty() {
-                            if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
-                                tc.output = Some(output.clone());
-                            }
-                            let _ = app.emit_all(
-                                "chat:tool_result",
-                                &ToolResultEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    tool_use_id: tool_id,
-                                    output,
-                                },
-                            );
-                        }
-                    }
-                    "file_change" => {
-                        let changes = item
-                            .get("changes")
-                            .map(|v| serde_json::to_string(v).unwrap_or_default())
-                            .unwrap_or_default();
-                        let tool_id = pending_tool_ids.remove(item_id).unwrap_or_default();
-                        if !tool_id.is_empty() {
-                            if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
-                                tc.output = Some(changes.clone());
-                            }
-                            let _ = app.emit_all(
-                                "chat:tool_result",
-                                &ToolResultEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    tool_use_id: tool_id,
-                                    output: changes,
-                                },
-                            );
-                        }
-                    }
-                    "reasoning" => {
-                        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                            content_blocks.push(ContentBlock::Thinking {
-                                thinking: text.to_string(),
-                            });
-                            let _ = app.emit_all(
-                                "chat:thinking",
-                                &ThinkingEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    content: text.to_string(),
-                                },
-                            );
-                        }
-                    }
-                    "mcp_tool_call" => {
-                        let output = item
-                            .get("output")
-                            .map(|v| {
-                                if let Some(s) = v.as_str() {
-                                    s.to_string()
-                                } else {
-                                    serde_json::to_string(v).unwrap_or_default()
-                                }
-                            })
-                            .unwrap_or_default();
-                        let tool_id = pending_tool_ids.remove(item_id).unwrap_or_default();
-                        if !tool_id.is_empty() {
-                            if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
-                                tc.output = Some(output.clone());
-                            }
-                            let _ = app.emit_all(
-                                "chat:tool_result",
-                                &ToolResultEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    tool_use_id: tool_id,
-                                    output,
-                                },
-                            );
-                        }
-                    }
-                    // Multi-agent collab tool completions
-                    "collab_tool_call" => {
-                        // Build output from agents_states (per-agent status + message)
-                        let output = if let Some(states) = item.get("agents_states") {
-                            if let Some(obj) = states.as_object() {
-                                let parts: Vec<String> = obj
-                                    .iter()
-                                    .map(|(tid, state)| {
-                                        let status = state
-                                            .get("status")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("unknown");
-                                        let msg = state
-                                            .get("message")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        if msg.is_empty() {
-                                            format!("{tid}: {status}")
-                                        } else {
-                                            format!("{tid}: {status} — {msg}")
-                                        }
-                                    })
-                                    .collect();
-                                if parts.is_empty() {
-                                    item.get("status")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("completed")
-                                        .to_string()
-                                } else {
-                                    parts.join("\n")
-                                }
-                            } else {
-                                "completed".to_string()
-                            }
-                        } else {
-                            item.get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("completed")
-                                .to_string()
-                        };
-                        let tool_id = pending_tool_ids.remove(item_id).unwrap_or_default();
-                        if !tool_id.is_empty() {
-                            // Also update the input with final data (receiver_thread_ids, agents_states)
-                            if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
-                                tc.output = Some(output.clone());
-                                tc.input = item.clone();
-                            }
-                            let _ = app.emit_all(
-                                "chat:tool_result",
-                                &ToolResultEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    tool_use_id: tool_id,
-                                    output,
-                                },
-                            );
-                        }
-                    }
-                    other => {
-                        log::debug!("Unknown Codex item.completed type: {other}");
-                    }
-                }
-            }
-
-            // item.updated — only emitted for todo_list per Codex source
-            "item.updated" => {
-                let item = msg.get("item").unwrap_or(&serde_json::Value::Null);
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-
-                if item_type == "todo_list" {
-                    // Update existing CodexTodoList tool_call input with new items
-                    if let Some(tool_id) = pending_tool_ids.get(item_id) {
-                        let updated_input = item.clone();
-                        if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == *tool_id) {
-                            tc.input = updated_input.clone();
-                        }
-                        // Re-emit tool_use so frontend updates
-                        let _ = app.emit_all(
-                            "chat:tool_use",
-                            &ToolUseEvent {
-                                session_id: session_id.to_string(),
-                                worktree_id: worktree_id.to_string(),
-                                id: tool_id.clone(),
-                                name: "CodexTodoList".to_string(),
-                                input: updated_input,
-                                parent_tool_use_id: None,
-                            },
-                        );
-                    }
-                }
-            }
-
-            "turn.completed" => {
-                if let Some(usage_obj) = msg.get("usage") {
-                    usage = Some(UsageData {
-                        input_tokens: usage_obj
-                            .get("input_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        output_tokens: usage_obj
-                            .get("output_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        cache_read_input_tokens: usage_obj
-                            .get("cached_input_tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        cache_creation_input_tokens: 0,
-                    });
-                }
-                completed = true;
-                log::trace!("Codex turn completed for session: {session_id}");
-            }
-
-            "turn.failed" => {
-                let error_msg = extract_codex_error_message(&msg)
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                let user_error = format_codex_user_error(&error_msg);
+    loop {
+        let event = match event_rx.recv_timeout(Duration::from_secs(300)) {
+            Ok(e) => e,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                log::warn!("Turn event timeout for session {session_id}");
                 let _ = app.emit_all(
                     "chat:error",
                     &ErrorEvent {
                         session_id: session_id.to_string(),
                         worktree_id: worktree_id.to_string(),
-                        error: user_error,
+                        error: "Codex response timed out".to_string(),
                     },
                 );
-                completed = true;
                 error_emitted = true;
+                break;
             }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                log::warn!("Event channel disconnected for session {session_id}");
+                cancelled = true;
+                break;
+            }
+        };
 
-            _ => {
-                // Check for unrecognized JSON with error fields (e.g., API error responses)
-                if let Some(error_msg) = extract_codex_error_message(&msg) {
-                    let user_error = format_codex_user_error(&error_msg);
-                    log::error!(
-                        "Codex error (unrecognized event) for session {session_id}: {error_msg}"
-                    );
+        match event {
+            ServerEvent::Notification { method, params } => {
+                // Write to output file for history replay
+                if let Some(ref mut writer) = output_writer {
+                    // Convert to old-format JSONL for backward-compatible history
+                    if let Some(line) = notification_to_history_line(&method, &params) {
+                        let _ = writeln!(writer, "{line}");
+                    }
+                }
+
+                process_server_notification(
+                    app,
+                    session_id,
+                    worktree_id,
+                    &method,
+                    &params,
+                    &mut full_content,
+                    &mut response_thread_id,
+                    &mut tool_calls,
+                    &mut content_blocks,
+                    &mut pending_tool_ids,
+                    &mut completed,
+                    &mut usage,
+                    &mut error_emitted,
+                );
+
+                // Update turn_id for cancellation
+                if method == "turn/started" {
+                    if let Some(turn_id) = params
+                        .get("turn")
+                        .and_then(|t| t.get("id"))
+                        .and_then(|v| v.as_str())
+                    {
+                        super::registry::register_codex_turn(session_id.to_string(), thread_id.to_string(), turn_id.to_string());
+                    }
+                }
+            }
+            ServerEvent::ServerRequest { id, method, params } => {
+                // Write to output file
+                if let Some(ref mut writer) = output_writer {
+                    let line = serde_json::json!({
+                        "method": method,
+                        "id": id,
+                        "params": params,
+                    });
+                    let _ = writeln!(writer, "{}", serde_json::to_string(&line).unwrap_or_default());
+                }
+
+                handle_approval_request(
+                    app,
+                    session_id,
+                    worktree_id,
+                    id,
+                    &method,
+                    &params,
+                    is_build_mode,
+                );
+            }
+            ServerEvent::ServerDied => {
+                log::error!("Codex app-server died during turn for session {session_id}");
+                if !error_emitted {
                     let _ = app.emit_all(
                         "chat:error",
                         &ErrorEvent {
                             session_id: session_id.to_string(),
                             worktree_id: worktree_id.to_string(),
-                            error: user_error,
+                            error: "Codex server connection lost. Try sending your message again."
+                                .to_string(),
                         },
                     );
-                    completed = true;
                     error_emitted = true;
                 }
+                cancelled = true;
+                break;
             }
         }
 
@@ -1312,49 +520,350 @@ fn tail_codex_attached(
         }
     }
 
-    // Fallback: process exited with no content and no error was emitted
-    if !error_emitted && !completed && full_content.is_empty() && cancelled {
-        log::warn!("Attached Codex process died silently for session {session_id} with no output");
-        let _ = app.emit_all(
-            "chat:error",
-            &ErrorEvent {
-                session_id: session_id.to_string(),
-                worktree_id: worktree_id.to_string(),
-                error: "Codex CLI exited unexpectedly without producing output. Check your API key and usage limits.".to_string(),
-            },
-        );
-        error_emitted = true;
-    }
-
-    // Don't emit chat:done if an error was emitted — the frontend chat:done
-    // handler clears errors, which would hide the error message from the user
+    // Emit chat:done unless error was emitted
     if !cancelled && !error_emitted {
         let _ = app.emit_all(
             "chat:done",
             &DoneEvent {
                 session_id: session_id.to_string(),
                 worktree_id: worktree_id.to_string(),
-                waiting_for_plan: false, // Attached path is always build mode
+                waiting_for_plan: is_plan_mode && !full_content.is_empty(),
             },
         );
     }
 
-    log::trace!(
-        "Attached Codex tailing complete: {} chars, {} tool calls, cancelled: {cancelled}",
-        full_content.len(),
-        tool_calls.len()
-    );
-
-    Ok(CodexResponse {
+    CodexResponse {
         content: full_content,
-        thread_id,
+        thread_id: response_thread_id,
         tool_calls,
         content_blocks,
         cancelled,
         error_emitted,
         usage,
-    })
+    }
 }
+
+/// Convert a server notification to old-format JSONL line for history compatibility.
+fn notification_to_history_line(method: &str, params: &serde_json::Value) -> Option<String> {
+    // Map app-server notification methods to old exec JSONL format
+    let event_type = match method {
+        "thread/started" => {
+            let tid = params.get("thread").and_then(|t| t.get("id")).and_then(|v| v.as_str())?;
+            let line = serde_json::json!({
+                "type": "thread.started",
+                "thread_id": tid,
+            });
+            return Some(serde_json::to_string(&line).ok()?);
+        }
+        "turn/started" => "turn.started",
+        "turn/completed" => {
+            // Map turn completion with usage data
+            let turn = params.get("turn")?;
+            let status = turn.get("status").and_then(|v| v.as_str()).unwrap_or("completed");
+            if status == "failed" {
+                let error = turn.get("error").cloned().unwrap_or(serde_json::Value::Null);
+                let line = serde_json::json!({
+                    "type": "turn.failed",
+                    "error": error,
+                });
+                return Some(serde_json::to_string(&line).ok()?);
+            }
+            let line = serde_json::json!({ "type": "turn.completed" });
+            return Some(serde_json::to_string(&line).ok()?);
+        }
+        "item/started" => {
+            let item = params.get("item")?;
+            let normalized = normalize_item_types(item);
+            let line = serde_json::json!({ "type": "item.started", "item": normalized });
+            return Some(serde_json::to_string(&line).ok()?);
+        }
+        "item/completed" => {
+            let item = params.get("item")?;
+            let normalized = normalize_item_types(item);
+            let line = serde_json::json!({ "type": "item.completed", "item": normalized });
+            return Some(serde_json::to_string(&line).ok()?);
+        }
+        "item/agentMessage/delta" => {
+            // Delta events don't have a direct old-format equivalent; skip for history
+            return None;
+        }
+        _ => return None,
+    };
+
+    let line = serde_json::json!({ "type": event_type });
+    Some(serde_json::to_string(&line).ok()?)
+}
+
+/// Process a server notification, emitting Tauri events.
+///
+/// Maps app-server v2 notification methods to the same Tauri events
+/// used by the old exec JSONL path.
+#[allow(clippy::too_many_arguments)]
+fn process_server_notification(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    worktree_id: &str,
+    method: &str,
+    params: &serde_json::Value,
+    full_content: &mut String,
+    thread_id: &mut String,
+    tool_calls: &mut Vec<ToolCall>,
+    content_blocks: &mut Vec<ContentBlock>,
+    pending_tool_ids: &mut HashMap<String, String>,
+    completed: &mut bool,
+    usage: &mut Option<UsageData>,
+    error_emitted: &mut bool,
+) {
+    log::trace!("[codex-server] Notification: {method} for session {session_id}");
+
+    match method {
+        "thread/started" => {
+            if let Some(tid) = params
+                .get("thread")
+                .and_then(|t| t.get("id"))
+                .and_then(|v| v.as_str())
+            {
+                *thread_id = tid.to_string();
+                log::trace!("Codex thread started: {tid}");
+            }
+        }
+        "item/agentMessage/delta" => {
+            // Streaming text delta — emit immediately
+            if let Some(delta) = params.get("delta").and_then(|v| v.as_str()) {
+                if !delta.is_empty() {
+                    full_content.push_str(delta);
+                    let _ = app.emit_all(
+                        "chat:chunk",
+                        &ChunkEvent {
+                            session_id: session_id.to_string(),
+                            worktree_id: worktree_id.to_string(),
+                            content: delta.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+        "item/started" => {
+            let item = params.get("item").unwrap_or(&serde_json::Value::Null);
+            // Map camelCase item types to our event processing
+            // App-server uses camelCase: commandExecution, fileChange, mcpToolCall, etc.
+            let event_item = normalize_item_types(item);
+            let event_type = "item.started";
+            let event_msg = serde_json::json!({ "type": event_type, "item": event_item });
+            process_codex_event(
+                app, session_id, worktree_id, &event_msg, event_type,
+                full_content, thread_id, tool_calls, content_blocks,
+                pending_tool_ids, completed, usage, error_emitted,
+            );
+        }
+        "item/completed" => {
+            let item = params.get("item").unwrap_or(&serde_json::Value::Null);
+            let event_item = normalize_item_types(item);
+            let event_type = "item.completed";
+            let event_msg = serde_json::json!({ "type": event_type, "item": event_item });
+            process_codex_event(
+                app, session_id, worktree_id, &event_msg, event_type,
+                full_content, thread_id, tool_calls, content_blocks,
+                pending_tool_ids, completed, usage, error_emitted,
+            );
+        }
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => {
+            // Streaming tool output — we could stream this but for now
+            // we let item/completed handle it with the final aggregated output
+        }
+        "turn/completed" => {
+            // Extract usage from the turn object
+            if let Some(turn) = params.get("turn") {
+                let status = turn.get("status").and_then(|v| v.as_str()).unwrap_or("completed");
+                if status == "failed" {
+                    let error_msg = turn
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown Codex error");
+                    let user_error = format_codex_user_error(error_msg);
+                    let _ = app.emit_all(
+                        "chat:error",
+                        &ErrorEvent {
+                            session_id: session_id.to_string(),
+                            worktree_id: worktree_id.to_string(),
+                            error: user_error,
+                        },
+                    );
+                    *error_emitted = true;
+                } else if status == "interrupted" {
+                    // Turn was interrupted (cancelled)
+                    log::trace!("Turn interrupted for session {session_id}");
+                }
+            }
+            *completed = true;
+            log::trace!("Codex turn completed for session: {session_id}");
+        }
+        "thread/tokenUsage/updated" => {
+            // Extract usage data
+            if let Some(token_usage) = params.get("tokenUsage") {
+                *usage = Some(UsageData {
+                    input_tokens: token_usage
+                        .get("inputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    output_tokens: token_usage
+                        .get("outputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    cache_read_input_tokens: token_usage
+                        .get("cachedInputTokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    cache_creation_input_tokens: 0,
+                });
+            }
+        }
+        "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => {
+            // Streaming reasoning/thinking text
+            if let Some(delta) = params.get("delta").and_then(|v| v.as_str()) {
+                if !delta.is_empty() {
+                    let _ = app.emit_all(
+                        "chat:thinking",
+                        &ThinkingEvent {
+                            session_id: session_id.to_string(),
+                            worktree_id: worktree_id.to_string(),
+                            content: delta.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+        "error" => {
+            let error_msg = params
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown Codex error");
+            let user_error = format_codex_user_error(error_msg);
+            let _ = app.emit_all(
+                "chat:error",
+                &ErrorEvent {
+                    session_id: session_id.to_string(),
+                    worktree_id: worktree_id.to_string(),
+                    error: user_error,
+                },
+            );
+            *error_emitted = true;
+            let will_retry = params.get("willRetry").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !will_retry {
+                *completed = true;
+            }
+        }
+        _ => {
+            log::trace!("Unhandled app-server notification: {method}");
+        }
+    }
+}
+
+/// Normalize app-server camelCase item types to snake_case for backward compatibility
+/// with the existing process_codex_event function.
+fn normalize_item_types(item: &serde_json::Value) -> serde_json::Value {
+    let mut item = item.clone();
+    if let Some(obj) = item.as_object_mut() {
+        if let Some(item_type) = obj.get("type").and_then(|v| v.as_str()) {
+            let normalized = match item_type {
+                "commandExecution" => "command_execution",
+                "fileChange" => "file_change",
+                "mcpToolCall" => "mcp_tool_call",
+                "agentMessage" => "agent_message",
+                "collabAgentToolCall" => "collab_tool_call",
+                "todoList" => "todo_list",
+                "webSearch" => "web_search",
+                "imageGeneration" => "image_generation",
+                "imageView" => "image_view",
+                "contextCompaction" => "context_compaction",
+                other => other,
+            };
+            obj.insert("type".to_string(), serde_json::json!(normalized));
+        }
+        // Also normalize nested field names for command_execution
+        if let Some(output) = obj.remove("aggregatedOutput") {
+            obj.insert("aggregated_output".to_string(), output);
+        }
+        if let Some(states) = obj.remove("agentsStates") {
+            obj.insert("agents_states".to_string(), states);
+        }
+    }
+    item
+}
+
+/// Handle an approval request from the app-server.
+fn handle_approval_request(
+    app: &tauri::AppHandle,
+    session_id: &str,
+    worktree_id: &str,
+    rpc_id: u64,
+    method: &str,
+    params: &serde_json::Value,
+    is_build_mode: bool,
+) {
+    match method {
+        "item/fileChange/requestApproval" => {
+            // Auto-accept file changes in build mode
+            if is_build_mode {
+                log::trace!("Auto-accepting file change (rpc_id={rpc_id})");
+                if let Err(e) = super::codex_server::send_response(
+                    rpc_id,
+                    serde_json::json!({"decision": "accept"}),
+                ) {
+                    log::error!("Failed to auto-accept file change: {e}");
+                }
+            } else {
+                // In non-build modes, also auto-accept (read-only sandbox prevents actual changes)
+                let _ = super::codex_server::send_response(
+                    rpc_id,
+                    serde_json::json!({"decision": "accept"}),
+                );
+            }
+        }
+        "item/commandExecution/requestApproval" => {
+            // Emit permission denied event for the frontend
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let item_id = params
+                .get("itemId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            log::trace!("Command approval requested (rpc_id={rpc_id}): {command}");
+
+            let denial = PermissionDenial {
+                tool_name: "Bash".to_string(),
+                tool_use_id: item_id,
+                tool_input: serde_json::json!({ "command": command }),
+                rpc_id: Some(rpc_id),
+            };
+            let _ = app.emit_all(
+                "chat:permission_denied",
+                &PermissionDeniedEvent {
+                    session_id: session_id.to_string(),
+                    worktree_id: worktree_id.to_string(),
+                    denials: vec![denial],
+                },
+            );
+            // Response will come from approve_codex_command Tauri command
+        }
+        _ => {
+            log::debug!("Unknown approval request method: {method}");
+            // Auto-accept unknown approvals to avoid blocking
+            let _ = super::codex_server::send_response(
+                rpc_id,
+                serde_json::json!({"decision": "accept"}),
+            );
+        }
+    }
+}
+
 
 /// Extract an error message from a Codex JSON value, handling both formats:
 /// - String format: `{"error": "message"}`
@@ -1658,20 +1167,27 @@ fn process_codex_event(
 
             match item_type {
                 "agent_message" => {
+                    // Streaming deltas (item/agentMessage/delta) already emitted
+                    // chat:chunk events and accumulated text in full_content.
+                    // Only push the content block here for the final CodexResponse.
                     if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
                         if !text.is_empty() {
-                            full_content.push_str(text);
                             content_blocks.push(ContentBlock::Text {
                                 text: text.to_string(),
                             });
-                            let _ = app.emit_all(
-                                "chat:chunk",
-                                &ChunkEvent {
-                                    session_id: session_id.to_string(),
-                                    worktree_id: worktree_id.to_string(),
-                                    content: text.to_string(),
-                                },
-                            );
+                            // If no deltas were received (edge case), full_content
+                            // would be missing this text — emit chunk as fallback.
+                            if !full_content.contains(text) {
+                                full_content.push_str(text);
+                                let _ = app.emit_all(
+                                    "chat:chunk",
+                                    &ChunkEvent {
+                                        session_id: session_id.to_string(),
+                                        worktree_id: worktree_id.to_string(),
+                                        content: text.to_string(),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -1903,231 +1419,6 @@ fn process_codex_event(
             }
         }
     }
-}
-
-// =============================================================================
-// File-based tailing for detached Codex CLI
-// =============================================================================
-
-/// Tail a Codex JSONL output file and emit events as new lines appear.
-///
-/// Maps Codex events to the same Tauri events used by Claude, so the
-/// frontend streaming infrastructure works unchanged.
-pub fn tail_codex_output(
-    app: &tauri::AppHandle,
-    session_id: &str,
-    worktree_id: &str,
-    output_file: &std::path::Path,
-    pid: u32,
-    is_plan_mode: bool,
-) -> Result<CodexResponse, String> {
-    use super::detached::is_process_alive;
-    use super::tail::{NdjsonTailer, POLL_INTERVAL, POLL_INTERVAL_FAST};
-    use std::time::{Duration, Instant};
-
-    log::trace!("Starting to tail Codex NDJSON output for session: {session_id}");
-
-    let mut tailer = NdjsonTailer::new_from_start(output_file)?;
-
-    let mut full_content = String::new();
-    let mut thread_id = String::new();
-    let mut tool_calls: Vec<ToolCall> = Vec::new();
-    let mut content_blocks: Vec<ContentBlock> = Vec::new();
-    let mut completed = false;
-    let mut cancelled = false;
-    let mut error_emitted = false;
-    let mut usage: Option<UsageData> = None;
-    let mut error_lines: Vec<String> = Vec::new();
-
-    // Track tool IDs for matching started/completed pairs
-    let mut pending_tool_ids: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-
-    let startup_timeout = Duration::from_secs(120);
-    let dead_process_timeout = Duration::from_secs(2);
-    let started_at = Instant::now();
-    let mut last_output_time = Instant::now();
-    let mut received_codex_output = false;
-
-    loop {
-        let lines = tailer.poll()?;
-        let had_data = !lines.is_empty();
-
-        if had_data {
-            last_output_time = Instant::now();
-        }
-
-        for line in lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            // Skip our metadata header
-            if line.contains("\"_run_meta\"") {
-                continue;
-            }
-
-            if !received_codex_output {
-                log::trace!("Received first Codex output for session: {session_id}");
-                received_codex_output = true;
-            }
-
-            let msg: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(m) => m,
-                Err(e) => {
-                    log::trace!("Failed to parse Codex line as JSON: {e}");
-                    let trimmed = line.trim().to_string();
-                    if !trimmed.is_empty() {
-                        error_lines.push(trimmed);
-                    }
-                    continue;
-                }
-            };
-
-            let event_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-            process_codex_event(
-                app,
-                session_id,
-                worktree_id,
-                &msg,
-                event_type,
-                &mut full_content,
-                &mut thread_id,
-                &mut tool_calls,
-                &mut content_blocks,
-                &mut pending_tool_ids,
-                &mut completed,
-                &mut usage,
-                &mut error_emitted,
-            );
-        }
-
-        if completed {
-            break;
-        }
-
-        // Check if externally cancelled
-        if !super::registry::is_process_running(session_id) {
-            log::trace!("Session {session_id} cancelled externally, stopping Codex tail");
-            cancelled = true;
-            break;
-        }
-
-        // Timeout logic
-        let process_alive = is_process_alive(pid);
-
-        if received_codex_output {
-            if !process_alive && last_output_time.elapsed() > dead_process_timeout {
-                log::trace!("Codex process {pid} is no longer running and no new output");
-                cancelled = true;
-                break;
-            }
-        } else {
-            let elapsed = started_at.elapsed();
-
-            if !process_alive && elapsed > Duration::from_secs(5) {
-                log::warn!(
-                    "Codex process {pid} died during startup after {:.1}s with no output",
-                    elapsed.as_secs_f64()
-                );
-                cancelled = true;
-                break;
-            }
-
-            if elapsed > startup_timeout {
-                log::warn!("Startup timeout exceeded waiting for Codex output");
-                cancelled = true;
-                break;
-            }
-        }
-
-        // Adaptive sleep: poll faster when actively receiving data (5ms)
-        // to reduce per-event latency, back off to 50ms when idle.
-        std::thread::sleep(if had_data {
-            POLL_INTERVAL_FAST
-        } else {
-            POLL_INTERVAL
-        });
-    }
-
-    // Surface errors
-    if cancelled || (full_content.is_empty() && !received_codex_output) {
-        if let Ok(remaining) = tailer.poll() {
-            for line in remaining {
-                let trimmed = line.trim();
-                if !trimmed.is_empty()
-                    && !trimmed.contains("\"_run_meta\"")
-                    && serde_json::from_str::<serde_json::Value>(trimmed).is_err()
-                {
-                    error_lines.push(trimmed.to_string());
-                }
-            }
-        }
-        let drained = tailer.drain_buffer();
-        if !drained.trim().is_empty() {
-            error_lines.push(drained.trim().to_string());
-        }
-    }
-
-    if !error_emitted && !error_lines.is_empty() && full_content.is_empty() {
-        let error_text = error_lines.join("\n");
-        log::warn!("Codex CLI error output for session {session_id}: {error_text}");
-
-        let user_error = format_codex_user_error(&error_text);
-        let _ = app.emit_all(
-            "chat:error",
-            &ErrorEvent {
-                session_id: session_id.to_string(),
-                worktree_id: worktree_id.to_string(),
-                error: user_error,
-            },
-        );
-        error_emitted = true;
-    }
-
-    // Fallback: process died silently with no content and no error emitted
-    if !error_emitted && !completed && full_content.is_empty() && cancelled {
-        log::warn!("Codex process died silently for session {session_id} with no output");
-        let _ = app.emit_all(
-            "chat:error",
-            &ErrorEvent {
-                session_id: session_id.to_string(),
-                worktree_id: worktree_id.to_string(),
-                error: "Codex CLI exited unexpectedly without producing output. Check your API key and usage limits.".to_string(),
-            },
-        );
-        error_emitted = true;
-    }
-
-    // Don't emit chat:done if an error was emitted — the frontend chat:done
-    // handler clears errors, which would hide the error message from the user
-    if !cancelled && !error_emitted {
-        let _ = app.emit_all(
-            "chat:done",
-            &DoneEvent {
-                session_id: session_id.to_string(),
-                worktree_id: worktree_id.to_string(),
-                waiting_for_plan: is_plan_mode && !full_content.is_empty(),
-            },
-        );
-    }
-
-    log::trace!(
-        "Codex tailing complete: {} chars, {} tool calls, cancelled: {cancelled}",
-        full_content.len(),
-        tool_calls.len()
-    );
-
-    Ok(CodexResponse {
-        content: full_content,
-        thread_id,
-        tool_calls,
-        content_blocks,
-        cancelled,
-        error_emitted,
-        usage,
-    })
 }
 
 // =============================================================================
@@ -2615,49 +1906,36 @@ pub fn execute_one_shot_codex(
 
 #[cfg(test)]
 mod tests {
-    use super::build_codex_args;
-    use std::path::Path;
+    use super::*;
 
     #[test]
     fn gpt_5_4_fast_enables_fast_service_tier() {
-        let (args, _) = build_codex_args(
-            Path::new("/tmp"),
-            None,
+        let params = build_thread_start_params(
+            std::path::Path::new("/tmp"),
             Some("gpt-5.4-fast"),
             Some("plan"),
-            None,
             false,
-            &[],
             None,
             false,
             None,
         );
-
-        assert!(args.windows(2).any(|w| w == ["--model", "gpt-5.4"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["-c", "service_tier=\"fast\""]));
+        assert_eq!(params["model"], "gpt-5.4");
+        assert_eq!(params["serviceTier"], "fast");
     }
 
     #[test]
     fn deprecated_fast_models_do_not_enable_fast_service_tier() {
-        let (args, _) = build_codex_args(
-            Path::new("/tmp"),
-            None,
+        let params = build_thread_start_params(
+            std::path::Path::new("/tmp"),
             Some("gpt-5.3-fast"),
             Some("plan"),
-            None,
             false,
-            &[],
             None,
             false,
             None,
         );
-
-        assert!(args.windows(2).any(|w| w == ["--model", "gpt-5.3"]));
-        assert!(!args
-            .windows(2)
-            .any(|w| w == ["-c", "service_tier=\"fast\""]));
+        assert_eq!(params["model"], "gpt-5.3");
+        assert!(params.get("serviceTier").is_none());
     }
 }
 

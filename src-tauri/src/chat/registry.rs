@@ -25,6 +25,11 @@ static PENDING_CANCELS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(H
 static CANCEL_FLAGS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Codex app-server turn registry: maps session_id → (thread_id, turn_id).
+/// Used to send `turn/interrupt` on cancellation instead of killing a process.
+static CODEX_TURN_REGISTRY: Lazy<Mutex<HashMap<String, (String, String)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Register a running Claude process PID for a session.
 /// Returns `false` if the session was cancelled before registration (process is killed immediately).
 pub fn register_process(session_id: String, pid: u32) -> bool {
@@ -94,6 +99,35 @@ pub fn unregister_cancel_flag(session_id: &str) {
     CANCEL_FLAGS.lock().unwrap().remove(session_id);
 }
 
+/// Register a Codex app-server turn for a session.
+/// Returns `false` if the session was already pending cancellation.
+pub fn register_codex_turn(session_id: String, thread_id: String, turn_id: String) -> bool {
+    // Check pending cancels first
+    {
+        let mut pending = PENDING_CANCELS.lock().unwrap();
+        if pending.remove(&session_id) {
+            log::warn!("Session {session_id} was cancelled before turn registered, interrupting");
+            let tid = thread_id.clone();
+            let tuid = turn_id.clone();
+            std::thread::spawn(move || {
+                let _ = super::codex_server::interrupt_turn(&tid, &tuid);
+            });
+            return false;
+        }
+    }
+
+    CODEX_TURN_REGISTRY
+        .lock()
+        .unwrap()
+        .insert(session_id, (thread_id, turn_id));
+    true
+}
+
+/// Remove a Codex app-server turn from the registry (called after turn completion).
+pub fn unregister_codex_turn(session_id: &str) {
+    CODEX_TURN_REGISTRY.lock().unwrap().remove(session_id);
+}
+
 /// Check if a session has a running process
 #[allow(dead_code)]
 pub fn is_process_running(session_id: &str) -> bool {
@@ -105,20 +139,22 @@ pub fn get_running_sessions() -> Vec<String> {
     PROCESS_REGISTRY.lock().unwrap().keys().cloned().collect()
 }
 
-/// Get all session IDs that are actively managed (running process OR cancel flag).
+/// Get all session IDs that are actively managed (running process, cancel flag, or codex turn).
 /// Used by recover_incomplete_runs to skip sessions that don't need recovery.
 pub fn get_actively_managed_sessions() -> HashSet<String> {
     let mut sessions: HashSet<String> =
         PROCESS_REGISTRY.lock().unwrap().keys().cloned().collect();
     sessions.extend(CANCEL_FLAGS.lock().unwrap().keys().cloned());
+    sessions.extend(CODEX_TURN_REGISTRY.lock().unwrap().keys().cloned());
     sessions
 }
 
-/// Check if a specific session is actively managed (has a running process or cancel flag).
+/// Check if a specific session is actively managed (has a running process, cancel flag, or codex turn).
 /// Used by resume_session to avoid starting a duplicate tail.
 pub fn is_session_actively_managed(session_id: &str) -> bool {
     PROCESS_REGISTRY.lock().unwrap().contains_key(session_id)
         || CANCEL_FLAGS.lock().unwrap().contains_key(session_id)
+        || CODEX_TURN_REGISTRY.lock().unwrap().contains_key(session_id)
 }
 
 /// Cancel a running Claude process for a session by sending SIGKILL to the process group
@@ -184,6 +220,27 @@ pub fn cancel_process(
             session_id: session_id.to_string(),
             worktree_id: worktree_id.to_string(),
             undo_send: false, // Process was running, may have partial content
+        };
+        if let Err(e) = app.emit_all("chat:cancelled", &event) {
+            log::error!("Failed to emit chat:cancelled event: {e}");
+        }
+
+        Ok(true)
+    } else if let Some((thread_id, turn_id)) = CODEX_TURN_REGISTRY.lock().unwrap().remove(session_id) {
+        // Codex app-server session: send turn/interrupt
+        log::warn!("Codex app-server session {session_id}: interrupting turn {turn_id}");
+        if let Err(e) = super::codex_server::interrupt_turn(&thread_id, &turn_id) {
+            log::error!("Failed to interrupt Codex turn: {e}");
+        }
+
+        if let Err(e) = run_log::mark_running_run_cancelled(app, session_id) {
+            log::warn!("Failed to mark run as cancelled in manifest: {e}");
+        }
+
+        let event = CancelledEvent {
+            session_id: session_id.to_string(),
+            worktree_id: worktree_id.to_string(),
+            undo_send: false,
         };
         if let Err(e) = app.emit_all("chat:cancelled", &event) {
             log::error!("Failed to emit chat:cancelled event: {e}");
@@ -266,6 +323,27 @@ pub fn cancel_process_if_running(
             log::error!("Failed to kill process tree for pid={pid}: {e}");
         }
         let _ = kill_process(pid);
+
+        if let Err(e) = run_log::mark_running_run_cancelled(app, session_id) {
+            log::warn!("Failed to mark run as cancelled in manifest: {e}");
+        }
+
+        let event = CancelledEvent {
+            session_id: session_id.to_string(),
+            worktree_id: worktree_id.to_string(),
+            undo_send: false,
+        };
+        if let Err(e) = app.emit_all("chat:cancelled", &event) {
+            log::error!("Failed to emit chat:cancelled event: {e}");
+        }
+
+        Ok(true)
+    } else if let Some((thread_id, turn_id)) = CODEX_TURN_REGISTRY.lock().unwrap().remove(session_id) {
+        // Codex app-server session actively running — interrupt turn
+        log::trace!("Codex app-server session {session_id} is running, interrupting turn {turn_id}");
+        if let Err(e) = super::codex_server::interrupt_turn(&thread_id, &turn_id) {
+            log::error!("Failed to interrupt Codex turn: {e}");
+        }
 
         if let Err(e) = run_log::mark_running_run_cancelled(app, session_id) {
             log::warn!("Failed to mark run as cancelled in manifest: {e}");

@@ -888,20 +888,15 @@ export const useChatStore = create<ChatUIState>()(
       addSendingSession: sessionId =>
         set(
           state => {
+            // Guard: skip no-op updates to avoid re-renders on every streaming chunk
+            if (state.sendingSessionIds[sessionId]) return state
             const now = Date.now()
-            const wasAlreadySending = !!state.sendingSessionIds[sessionId]
-            console.log(`[Store] addSendingSession id=${sessionId}`, { currentSending: Object.keys(state.sendingSessionIds), wasAlreadySending })
             return {
               sendingSessionIds: {
                 ...state.sendingSessionIds,
                 [sessionId]: true,
               },
-              // Only set timestamp on initial send — chunk-driven re-adds must
-              // preserve the original timestamp so the stale-event protection
-              // in completeSession/pauseSession/failSession works correctly.
-              sendStartedAt: wasAlreadySending
-                ? state.sendStartedAt
-                : { ...state.sendStartedAt, [sessionId]: now },
+              sendStartedAt: { ...state.sendStartedAt, [sessionId]: now },
             }
           },
           undefined,

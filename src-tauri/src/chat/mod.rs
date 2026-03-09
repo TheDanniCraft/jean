@@ -1,5 +1,6 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod codex_server;
 mod commands;
 pub mod detached;
 mod naming;

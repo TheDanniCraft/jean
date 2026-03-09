@@ -2198,9 +2198,11 @@ pub fn run() {
             // Spawned async — cleanup involves blocking I/O (HTTP health check with
             // 1.2s timeout, process kill, 300ms sleep) that can delay startup by ~1.5s.
             let cleanup_handle = app.handle().clone();
+            let codex_cleanup_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::task::spawn_blocking(move || {
                     opencode_server::cleanup_orphaned_server(&cleanup_handle);
+                    chat::codex_server::cleanup_orphaned_server(&codex_cleanup_handle);
                 })
                 .await
                 .ok();
@@ -2706,6 +2708,7 @@ pub fn run() {
                     Ok(false) => {}
                     Err(e) => eprintln!("[OPENCODE CLEANUP] Failed during Exit: {e}"),
                 }
+                chat::codex_server::shutdown_server();
             }
             tauri::RunEvent::ExitRequested { api, .. } => {
                 // In headless mode, prevent exit when window closes
@@ -2725,6 +2728,7 @@ pub fn run() {
                         eprintln!("[OPENCODE CLEANUP] Failed during ExitRequested: {e}")
                     }
                 }
+                chat::codex_server::shutdown_server();
             }
             tauri::RunEvent::WindowEvent { label, event, .. } => {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
@@ -2744,6 +2748,7 @@ pub fn run() {
                             eprintln!("[OPENCODE CLEANUP] Failed during CloseRequested: {e}")
                         }
                     }
+                    chat::codex_server::shutdown_server();
                 }
                 if let tauri::WindowEvent::Destroyed = event {
                     eprintln!("[TERMINAL CLEANUP] Window {label} destroyed");

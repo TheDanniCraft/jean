@@ -29,7 +29,7 @@
         "dragDropEnabled": true,
         "windowEffects": {
           "effects": [
-            "hudWindow"
+            "sidebar"
           ],
           "radius": 12,
           "state": "active"

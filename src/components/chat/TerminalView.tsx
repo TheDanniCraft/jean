@@ -7,6 +7,8 @@ import {
   disposeTerminal,
   disposeAllWorktreeTerminals,
 } from '@/lib/terminal-instances'
+import { Kbd } from '@/components/ui/kbd'
+import { formatShortcutDisplay } from '@/types/keybindings'
 import { cn } from '@/lib/utils'
 import '@xterm/xterm/css/xterm.css'
 
@@ -214,9 +216,11 @@ export function TerminalView({
       {/* Tab bar - fixed height for consistency */}
       <div className="flex h-8 items-stretch border-b border-neutral-700">
         <div className="flex min-w-0 items-center overflow-x-auto">
-          {terminals.map(terminal => {
+          {terminals.map((terminal, index) => {
             const isActive = terminal.id === activeTerminalId
             const isRunning = runningTerminals.has(terminal.id)
+            const shortcutLabel =
+              index < 9 ? formatShortcutDisplay(`mod+${index + 1}`) : null
 
             return (
               <button
@@ -235,6 +239,18 @@ export function TerminalView({
                   <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
                 )}
                 <span className="max-w-[100px] truncate">{terminal.label}</span>
+                {shortcutLabel && (
+                  <Kbd
+                    className={cn(
+                      'h-3.5 px-1 text-[9px]',
+                      isActive
+                        ? 'bg-neutral-700 text-neutral-200'
+                        : 'bg-neutral-800/80 text-neutral-400'
+                    )}
+                  >
+                    {shortcutLabel}
+                  </Kbd>
+                )}
                 {/* Close button - always visible */}
                 <span
                   role="button"

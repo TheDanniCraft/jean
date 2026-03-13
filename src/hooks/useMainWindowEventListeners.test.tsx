@@ -6,6 +6,7 @@ import {
   addTerminalTabForShortcut,
   closeActiveTerminalTabForShortcut,
   getTerminalShortcutWorktreeId,
+  switchActiveTerminalTabByIndexForShortcut,
 } from './useMainWindowEventListeners'
 
 const { mockInvoke, mockListen, mockDisposeTerminal } = vi.hoisted(() => ({
@@ -202,6 +203,70 @@ describe('useMainWindowEventListeners terminal shortcuts', () => {
     expect(useTerminalStore.getState().terminals['modal-worktree']).toEqual([])
     expect(useTerminalStore.getState().modalTerminalOpen['modal-worktree']).toBe(
       false
+    )
+  })
+
+  it('switches the active terminal tab by index for the modal worktree', () => {
+    focusTerminal()
+
+    useUIStore.setState({
+      sessionChatModalOpen: true,
+      sessionChatModalWorktreeId: 'modal-worktree',
+    })
+    useTerminalStore.setState({
+      terminals: {
+        'modal-worktree': [
+          {
+            id: 'term-1',
+            worktreeId: 'modal-worktree',
+            command: null,
+            label: 'Shell',
+          },
+          {
+            id: 'term-2',
+            worktreeId: 'modal-worktree',
+            command: 'bun run dev',
+            label: 'dev',
+          },
+        ],
+      },
+      activeTerminalIds: { 'modal-worktree': 'term-1' },
+      modalTerminalOpen: { 'modal-worktree': true },
+      terminalVisible: true,
+    })
+
+    expect(switchActiveTerminalTabByIndexForShortcut(1)).toBe(true)
+    expect(useTerminalStore.getState().activeTerminalIds['modal-worktree']).toBe(
+      'term-2'
+    )
+  })
+
+  it('consumes invalid terminal tab indexes without falling back to session switching', () => {
+    focusTerminal()
+
+    useUIStore.setState({
+      sessionChatModalOpen: true,
+      sessionChatModalWorktreeId: 'modal-worktree',
+    })
+    useTerminalStore.setState({
+      terminals: {
+        'modal-worktree': [
+          {
+            id: 'term-1',
+            worktreeId: 'modal-worktree',
+            command: null,
+            label: 'Shell',
+          },
+        ],
+      },
+      activeTerminalIds: { 'modal-worktree': 'term-1' },
+      modalTerminalOpen: { 'modal-worktree': true },
+      terminalVisible: true,
+    })
+
+    expect(switchActiveTerminalTabByIndexForShortcut(8)).toBe(true)
+    expect(useTerminalStore.getState().activeTerminalIds['modal-worktree']).toBe(
+      'term-1'
     )
   })
 })

@@ -504,6 +504,8 @@ interface ChatUIState {
   // Actions - Batch state transitions (single set() to avoid render cascades)
   /** Atomically clear all streaming state and mark session as reviewing */
   completeSession: (sessionId: string) => void
+  /** Atomically clear all streaming state for a user cancellation */
+  cancelSession: (sessionId: string) => void
   /** Atomically clear streaming state and mark session as waiting for input */
   pauseSession: (sessionId: string) => void
   /** Atomically clear streaming state after an error, mark as reviewing */
@@ -2124,6 +2126,50 @@ export const useChatStore = create<ChatUIState>()(
           },
           undefined,
           'completeSession'
+        ),
+
+      cancelSession: sessionId =>
+        set(
+          state => {
+            const sendStarted = state.sendStartedAt[sessionId] ?? 0
+            const elapsed = Date.now() - sendStarted
+            const { [sessionId]: _sc, ...streamingContents } =
+              state.streamingContents
+            const { [sessionId]: _sb, ...streamingContentBlocks } =
+              state.streamingContentBlocks
+            const { [sessionId]: _tc, ...activeToolCalls } =
+              state.activeToolCalls
+            const { [sessionId]: _ss, ...sendingSessionIds } =
+              state.sendingSessionIds
+            const { [sessionId]: _wi, ...waitingForInputSessionIds } =
+              state.waitingForInputSessionIds
+            const { [sessionId]: _sp, ...streamingPlanApprovals } =
+              state.streamingPlanApprovals
+            const { [sessionId]: _em, ...executingModes } =
+              state.executingModes
+            const { [sessionId]: _sa, ...sendStartedAtRest } =
+              state.sendStartedAt
+            return {
+              streamingContents,
+              streamingContentBlocks,
+              activeToolCalls,
+              sendingSessionIds,
+              waitingForInputSessionIds,
+              streamingPlanApprovals,
+              executingModes,
+              sendStartedAt: sendStartedAtRest,
+              completedDurations:
+                sendStarted > 0
+                  ? { ...state.completedDurations, [sessionId]: elapsed }
+                  : state.completedDurations,
+              reviewingSessions: {
+                ...state.reviewingSessions,
+                [sessionId]: true,
+              },
+            }
+          },
+          undefined,
+          'cancelSession'
         ),
 
       pauseSession: sessionId =>

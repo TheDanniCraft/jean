@@ -33,11 +33,11 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   const visible = isSending || showRestored
 
   return (
-    <div className="mt-1 min-h-4">
+    <div className="my-1 min-h-4">
       <span
         className={
           visible
-            ? 'block text-xs leading-4 text-muted-foreground/40 tabular-nums font-mono select-none'
+            ? 'block text-xs leading-4 dark:text-yellow-500 tabular-nums font-mono select-none'
             : 'invisible block text-xs leading-4 text-muted-foreground/40 tabular-nums font-mono select-none'
         }
         aria-hidden={!visible}
@@ -48,7 +48,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
           </span>
         ) : (
           <>
-            {getModeLabel(streamingExecutionMode)} for {elapsed ?? '0s'}
+            {getModeLabel(streamingExecutionMode)} for {elapsed ?? '0s'}...
           </>
         )}
       </span>

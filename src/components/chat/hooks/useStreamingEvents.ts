@@ -1266,8 +1266,8 @@ export default function useStreamingEvents({
 
         // NOW batch-clear all streaming state in a single Zustand set()
         // This happens AFTER optimistic messages are in the cache, preventing flicker
-        console.log(`[Cancelled] about to completeSession session=${session_id} shouldRestore=${shouldRestoreMessage}`, { currentSending: Object.keys(useChatStore.getState().sendingSessionIds) })
-        useChatStore.getState().completeSession(session_id)
+        console.log(`[Cancelled] about to cancelSession session=${session_id} shouldRestore=${shouldRestoreMessage}`, { currentSending: Object.keys(useChatStore.getState().sendingSessionIds) })
+        useChatStore.getState().cancelSession(session_id)
 
         // For restore path: override reviewing state based on whether messages remain
         if (shouldRestoreMessage) {

@@ -171,6 +171,22 @@ describe('ChatStore', () => {
       expect(state.sendStartedAt['session-1']).toBe(now)
       expect(state.reviewingSessions['session-1']).toBeUndefined()
     })
+
+    it('always clears sending state for an explicit cancellation', () => {
+      const now = Date.now()
+
+      useChatStore.setState({
+        sendingSessionIds: { 'session-1': true },
+        sendStartedAt: { 'session-1': now },
+      })
+
+      useChatStore.getState().cancelSession('session-1')
+
+      const state = useChatStore.getState()
+      expect(state.sendingSessionIds['session-1']).toBeUndefined()
+      expect(state.sendStartedAt['session-1']).toBeUndefined()
+      expect(state.reviewingSessions['session-1']).toBe(true)
+    })
   })
 
   describe('waiting for input state', () => {

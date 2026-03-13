@@ -182,6 +182,13 @@ const components: Components = {
   td: ({ children }) => <td className="px-4 py-2.5">{children}</td>,
 }
 
+const streamingComponents: Components = {
+  ...components,
+  p: ({ children }) => (
+    <p className="my-0 leading-relaxed first:mt-0 last:mb-0">{children}</p>
+  ),
+}
+
 /**
  * Memoized markdown renderer to prevent expensive re-parsing
  * ReactMarkdown is expensive, so we avoid re-renders when content hasn't changed
@@ -197,7 +204,7 @@ const Markdown = memo(function Markdown({
   return (
     <div className={cn('markdown leading-relaxed break-words', className)}>
       <ReactMarkdown
-        components={components}
+        components={streaming ? streamingComponents : components}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeRaw]}
       >

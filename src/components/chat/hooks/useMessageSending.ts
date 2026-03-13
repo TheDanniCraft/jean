@@ -478,7 +478,7 @@ export function useMessageSending({
         useChatStore.getState().sendingSessionIds[activeSessionId] ?? false
       if (stillSending) {
         console.log('[Cancel] Force-clearing stale sending state')
-        useChatStore.getState().completeSession(activeSessionId)
+        useChatStore.getState().cancelSession(activeSessionId)
       }
     }
   }, [activeSessionId, activeWorktreeId])

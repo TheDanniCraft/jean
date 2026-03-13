@@ -17,6 +17,7 @@ import { EditedFilesDisplay } from './EditedFilesDisplay'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
 import { logger } from '@/lib/logger'
+import { Skeleton } from '@/components/ui/skeleton'
 
 interface StreamingMessageProps {
   /** Session ID for the streaming message */
@@ -113,7 +114,13 @@ export const StreamingMessage = memo(function StreamingMessage({
   return (
     <div className="min-h-4 text-muted-foreground">
       {!hasVisibleStreamingContent && (
-        <div className="min-h-6" aria-hidden="true" />
+        <div
+          className="py-1"
+          aria-hidden="true"
+          data-testid="streaming-response-placeholder"
+        >
+          <Skeleton className="h-4 w-[min(20rem,52%)] rounded-sm bg-muted/60" />
+        </div>
       )}
       {/* Render streaming content blocks inline if available */}
       {contentBlocks.length > 0 ? (

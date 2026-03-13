@@ -88,6 +88,10 @@ export function getOrCreateTerminal(
       if (!event.shiftKey && !event.altKey && code === 'KeyT') return false
       // CMD+W → close terminal tab
       if (!event.shiftKey && !event.altKey && code === 'KeyW') return false
+      // CMD+1..9 → switch terminal tab
+      if (!event.shiftKey && !event.altKey && /^Digit[1-9]$/.test(code)) {
+        return false
+      }
       // CMD+Alt+Backspace → cancel prompt
       if (event.altKey && (code === 'Backspace' || code === 'Delete'))
         return false

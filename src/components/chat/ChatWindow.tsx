@@ -155,6 +155,7 @@ import { usePlanState } from './hooks/usePlanState'
 import { useActiveTodosAndAgents } from './hooks/useActiveTodosAndAgents'
 import { usePendingAttachments } from './hooks/usePendingAttachments'
 import { dedupeInFlightAssistantMessage } from './in-flight-message-dedupe'
+import { shouldShowPermissionApproval } from './permission-approval-utils'
 
 // PERFORMANCE: Stable empty array references to prevent infinite render loops
 // When Zustand selectors return [], a new reference is created each time
@@ -659,6 +660,12 @@ export function ChatWindow({
         EMPTY_PERMISSION_DENIALS)
       : EMPTY_PERMISSION_DENIALS
   )
+  const showPermissionApproval = shouldShowPermissionApproval({
+    pendingDenialsCount: pendingDenials.length,
+    isSending,
+    executionMode,
+    isCodexBackend,
+  })
 
 
   // PERFORMANCE: Pre-compute last assistant message to avoid rescanning in multiple memos
@@ -2112,10 +2119,8 @@ export function ChatWindow({
                             )}
 
                             {/* Permission approval UI - shown when tools require approval (never in yolo mode) */}
-                            {pendingDenials.length > 0 &&
-                              activeSessionId &&
-                              !isSending &&
-                              executionMode !== 'yolo' && (
+                            {showPermissionApproval &&
+                              activeSessionId && (
                                 <PermissionApproval
                                   sessionId={activeSessionId}
                                   denials={pendingDenials}

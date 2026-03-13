@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useChatStore } from '@/store/chat-store'
 import { useProjectsStore } from '@/store/projects-store'
+import { useUIStore } from '@/store/ui-store'
 import { usePreferences } from '@/services/preferences'
 import {
   useSendMessage,
@@ -24,6 +25,7 @@ import {
   extractSkillPaths,
   extractTextFilePaths,
 } from '../message-content-utils'
+import { navigateToApprovedWorktree } from '../worktree-approval-navigation'
 
 const THINKING_LEVEL_VALUES = new Set<ThinkingLevel>([
   'off',
@@ -226,16 +228,7 @@ export function useWorktreeApproval({
 
       toast.loading('Sending plan...', { id: toastId })
 
-      // Step 5: Navigate to new worktree
-      const projectsStore = useProjectsStore.getState()
-      projectsStore.expandProject(readyWorktree.project_id)
-      projectsStore.selectWorktree(readyWorktree.id)
-
-      const chatStore = useChatStore.getState()
-      chatStore.registerWorktreePath(readyWorktree.id, readyWorktree.path)
-      chatStore.setActiveWorktree(readyWorktree.id, readyWorktree.path)
-
-      // Step 6: Use the default session auto-created by the backend, or create one if none exists
+      // Step 5: Use the default session auto-created by the backend, or create one if none exists
       let newSession: Session
       try {
         const sessionsData = await invoke<WorktreeSessions>('get_sessions', {
@@ -255,11 +248,34 @@ export function useWorktreeApproval({
         return
       }
 
-      // Step 7: Switch to new session
+      // Step 6: Switch to new session and preserve the current presentation mode
+      const chatStore = useChatStore.getState()
       chatStore.setActiveSession(readyWorktree.id, newSession.id)
       chatStore.addUserInitiatedSession(newSession.id)
+      const projectsStore = useProjectsStore.getState()
+      const uiStore = useUIStore.getState()
+      navigateToApprovedWorktree(
+        readyWorktree,
+        {
+          activeWorktreePath: chatStore.activeWorktreePath,
+          sessionChatModalOpen: uiStore.sessionChatModalOpen,
+        },
+        {
+          expandProject: projectsStore.expandProject,
+          selectWorktree: projectsStore.selectWorktree,
+          registerWorktreePath: chatStore.registerWorktreePath,
+          setActiveWorktree: chatStore.setActiveWorktree,
+          openWorktreeModal: (worktreeId, worktreePath) => {
+            window.dispatchEvent(
+              new CustomEvent('open-worktree-modal', {
+                detail: { worktreeId, worktreePath },
+              })
+            )
+          },
+        }
+      )
 
-      // Extract attachment references from original session
+      // Step 7: Extract attachment references from original session
       let allUserContent = ''
       try {
         const fullSession = await invoke<Session>('get_session', {

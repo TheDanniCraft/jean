@@ -441,6 +441,7 @@ fn process_turn_events(
     let mut cancelled = false;
     let mut error_emitted = false;
     let mut usage: Option<UsageData> = None;
+    let mut received_completed_agent_message = false;
 
     // Open output file for history
     let mut output_writer = std::fs::OpenOptions::new()
@@ -497,6 +498,7 @@ fn process_turn_events(
                     &mut cancelled,
                     &mut usage,
                     &mut error_emitted,
+                    &mut received_completed_agent_message,
                 );
 
                 // Update turn_id for cancellation
@@ -563,11 +565,14 @@ fn process_turn_events(
         }
     }
 
-    // Write accumulated text to JSONL for cancelled/interrupted runs.
-    // Delta events (item/agentMessage/delta) are not saved to JSONL during streaming,
-    // so the text would be lost on app reload. Write a synthetic item.completed line
-    // with the accumulated content so parse_codex_run_to_message() can reconstruct it.
-    if (cancelled || error_emitted) && !full_content.is_empty() {
+    // Write accumulated text to JSONL for cancelled/interrupted runs only when
+    // Codex never emitted a completed agent_message item. If one was already
+    // written to history, appending another synthetic completion duplicates the
+    // final assistant text on reload and after query invalidation.
+    if (cancelled || error_emitted)
+        && !full_content.is_empty()
+        && !received_completed_agent_message
+    {
         if let Some(ref mut writer) = output_writer {
             let synthetic = serde_json::json!({
                 "type": "item.completed",
@@ -689,6 +694,7 @@ fn process_server_notification(
     cancelled: &mut bool,
     usage: &mut Option<UsageData>,
     error_emitted: &mut bool,
+    received_completed_agent_message: &mut bool,
 ) {
     log::trace!("[codex-server] Notification: {method} for session {session_id}");
 
@@ -745,6 +751,9 @@ fn process_server_notification(
         "item/completed" => {
             let item = params.get("item").unwrap_or(&serde_json::Value::Null);
             let event_item = normalize_item_types(item);
+            if event_item.get("type").and_then(|v| v.as_str()) == Some("agent_message") {
+                *received_completed_agent_message = true;
+            }
             let event_type = "item.completed";
             let event_msg = serde_json::json!({ "type": event_type, "item": event_item });
             process_codex_event(
@@ -1716,6 +1725,9 @@ pub fn parse_codex_run_to_message(
                 match item_type {
                     "agent_message" => {
                         if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                            if run.cancelled && content == text {
+                                continue;
+                            }
                             content.push_str(text);
                             content_blocks.push(ContentBlock::Text {
                                 text: text.to_string(),
@@ -2014,6 +2026,7 @@ pub fn execute_one_shot_codex(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::types::{RunEntry, RunStatus};
 
     #[test]
     fn gpt_5_4_fast_enables_fast_service_tier() {
@@ -2043,6 +2056,44 @@ mod tests {
         );
         assert_eq!(params["model"], "gpt-5.3");
         assert!(params.get("serviceTier").is_none());
+    }
+
+    #[test]
+    fn parse_cancelled_run_ignores_duplicate_completed_agent_message() {
+        let lines = vec![
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Same text"}}"#
+                .to_string(),
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"Same text"}}"#
+                .to_string(),
+        ];
+        let run = RunEntry {
+            run_id: "run-1".to_string(),
+            user_message_id: "user-1".to_string(),
+            user_message: "prompt".to_string(),
+            model: None,
+            execution_mode: Some("plan".to_string()),
+            thinking_level: None,
+            effort_level: None,
+            started_at: 1,
+            ended_at: Some(2),
+            status: RunStatus::Cancelled,
+            assistant_message_id: Some("assistant-1".to_string()),
+            cancelled: true,
+            recovered: false,
+            claude_session_id: None,
+            pid: None,
+            usage: None,
+        };
+
+        let message = parse_codex_run_to_message(&lines, &run).expect("message");
+
+        assert_eq!(message.content, "Same text");
+        assert_eq!(
+            message.content_blocks,
+            vec![ContentBlock::Text {
+                text: "Same text".to_string(),
+            }]
+        );
     }
 }
 

@@ -79,6 +79,21 @@ export function closeActiveTerminalTabForShortcut(): boolean {
   return true
 }
 
+export function switchActiveTerminalTabByIndexForShortcut(index: number): boolean {
+  const worktreeId = getTerminalShortcutWorktreeId()
+  if (!worktreeId) return false
+
+  const terminalStore = useTerminalStore.getState()
+  const terminals = terminalStore.terminals[worktreeId] ?? []
+  const targetTerminal = terminals[index]
+
+  if (targetTerminal) {
+    terminalStore.setActiveTerminal(worktreeId, targetTerminal.id)
+  }
+
+  return true
+}
+
 /**
  * Main window event listeners - handles global keyboard shortcuts and other app-level events
  *
@@ -484,6 +499,21 @@ export function useMainWindowEventListeners() {
 
         if (terminalShortcutWorktreeId) {
           const kb = keybindingsRef.current
+          const digitMatch = e.code.match(/^Digit(\d)$/)
+          const digit = digitMatch ? parseInt(digitMatch[1]!, 10) : NaN
+
+          if (
+            (e.metaKey || e.ctrlKey) &&
+            !e.shiftKey &&
+            !e.altKey &&
+            digit >= 1 &&
+            digit <= 9
+          ) {
+            e.preventDefault()
+            e.stopPropagation()
+            switchActiveTerminalTabByIndexForShortcut(digit - 1)
+            return
+          }
 
           if (shortcut === kb.new_session) {
             e.preventDefault()

@@ -23,9 +23,12 @@ import type { ReviewFinding } from '@/types/chat'
 import { formatAnswersAsNaturalLanguage } from '@/services/chat'
 import { parseReviewFindings, getFindingKey } from '../review-finding-utils'
 import { findPlanContent, findPlanFilePath } from '../tool-call-utils'
+import { navigateToApprovedWorktree } from '../worktree-approval-navigation'
+import { getCodexPermissionApprovalMode } from '../permission-approval-utils'
 import { generateId } from '@/lib/uuid'
 import { preferencesQueryKeys } from '@/services/preferences'
 import { useProjectsStore } from '@/store/projects-store'
+import { useUIStore } from '@/store/ui-store'
 import type { AppPreferences } from '@/types/preferences'
 import type { Worktree, WorktreeCreatedEvent, WorktreeCreateErrorEvent } from '@/types/projects'
 
@@ -1340,13 +1343,6 @@ export function useMessageHandlers({
 
       toast.loading('Sending plan...', { id: toastId })
 
-      // Navigate to new worktree
-      const projectsStore = useProjectsStore.getState()
-      projectsStore.expandProject(readyWorktree.project_id)
-      projectsStore.selectWorktree(readyWorktree.id)
-      store.registerWorktreePath(readyWorktree.id, readyWorktree.path)
-      store.setActiveWorktree(readyWorktree.id, readyWorktree.path)
-
       // Use the default session auto-created by the backend, or create one if none exists
       let newSession: Session
       try {
@@ -1369,6 +1365,28 @@ export function useMessageHandlers({
 
       store.setActiveSession(readyWorktree.id, newSession.id)
       store.addUserInitiatedSession(newSession.id)
+      const projectsStore = useProjectsStore.getState()
+      const uiStore = useUIStore.getState()
+      navigateToApprovedWorktree(
+        readyWorktree,
+        {
+          activeWorktreePath: store.activeWorktreePath,
+          sessionChatModalOpen: uiStore.sessionChatModalOpen,
+        },
+        {
+          expandProject: projectsStore.expandProject,
+          selectWorktree: projectsStore.selectWorktree,
+          registerWorktreePath: store.registerWorktreePath,
+          setActiveWorktree: store.setActiveWorktree,
+          openWorktreeModal: (worktreeId, worktreePath) => {
+            window.dispatchEvent(
+              new CustomEvent('open-worktree-modal', {
+                detail: { worktreeId, worktreePath },
+              })
+            )
+          },
+        }
+      )
 
       // Resolve model/backend/thinking based on mode
       const isYolo = mode === 'yolo'
@@ -1571,13 +1589,6 @@ export function useMessageHandlers({
 
     toast.loading('Sending plan...', { id: toastId })
 
-    // Navigate to new worktree
-    const projectsStore = useProjectsStore.getState()
-    projectsStore.expandProject(readyWorktree.project_id)
-    projectsStore.selectWorktree(readyWorktree.id)
-    store.registerWorktreePath(readyWorktree.id, readyWorktree.path)
-    store.setActiveWorktree(readyWorktree.id, readyWorktree.path)
-
     // Use the default session auto-created by the backend, or create one if none exists
     let newSession: Session
     try {
@@ -1600,6 +1611,28 @@ export function useMessageHandlers({
 
     store.setActiveSession(readyWorktree.id, newSession.id)
     store.addUserInitiatedSession(newSession.id)
+    const projectsStore = useProjectsStore.getState()
+    const uiStore = useUIStore.getState()
+    navigateToApprovedWorktree(
+      readyWorktree,
+      {
+        activeWorktreePath: store.activeWorktreePath,
+        sessionChatModalOpen: uiStore.sessionChatModalOpen,
+      },
+      {
+        expandProject: projectsStore.expandProject,
+        selectWorktree: projectsStore.selectWorktree,
+        registerWorktreePath: store.registerWorktreePath,
+        setActiveWorktree: store.setActiveWorktree,
+        openWorktreeModal: (worktreeId, worktreePath) => {
+          window.dispatchEvent(
+            new CustomEvent('open-worktree-modal', {
+              detail: { worktreeId, worktreePath },
+            })
+          )
+        },
+      }
+    )
 
     // Resolve model/backend/thinking based on mode
     const isYolo = mode === 'yolo'
@@ -1756,26 +1789,43 @@ export function useMessageHandlers({
       // Codex path: send approval response via JSON-RPC (process is still running)
       if (backend === 'codex') {
         const denials = getPendingDenials(sessionId)
+        const currentMode =
+          useChatStore.getState().executionModes[sessionId] ??
+          executionModeRef.current
+        const nextMode = getCodexPermissionApprovalMode(currentMode, false)
         clearPendingDenials(sessionId)
         clearDeniedMessageContext(sessionId)
         setWaitingForInput(sessionId, false)
-        setExecutionMode(sessionId, 'build')
-        console.log('[useMessageHandlers] Codex path: Broadcasting executionMode=build for session', sessionId)
-        invoke('broadcast_session_setting', {
-          sessionId,
-          key: 'executionMode',
-          value: 'build',
-        }).then(() => {
-          console.log('[useMessageHandlers] Codex broadcast executionMode=build succeeded')
-        }).catch(err => {
-          console.error('[useMessageHandlers] Codex broadcast executionMode=build failed:', err)
-        })
-        invoke('update_session_state', {
-          worktreeId,
-          worktreePath,
-          sessionId,
-          selectedExecutionMode: 'build',
-        }).catch(() => undefined)
+        if (nextMode !== currentMode) {
+          setExecutionMode(sessionId, nextMode)
+          console.log(
+            '[useMessageHandlers] Codex path: Broadcasting executionMode for session',
+            sessionId,
+            nextMode
+          )
+          invoke('broadcast_session_setting', {
+            sessionId,
+            key: 'executionMode',
+            value: nextMode,
+          })
+            .then(() => {
+              console.log(
+                '[useMessageHandlers] Codex broadcast executionMode succeeded'
+              )
+            })
+            .catch(err => {
+              console.error(
+                '[useMessageHandlers] Codex broadcast executionMode failed:',
+                err
+              )
+            })
+          invoke('update_session_state', {
+            worktreeId,
+            worktreePath,
+            sessionId,
+            selectedExecutionMode: nextMode,
+          }).catch(() => undefined)
+        }
 
         requestAnimationFrame(() => {
           scrollToBottom(true)
@@ -1942,10 +1992,30 @@ export function useMessageHandlers({
       // Codex path: accept current denial and switch to yolo for future messages
       if (backend === 'codex') {
         const denials = getPendingDenials(sessionId)
+        const currentMode =
+          useChatStore.getState().executionModes[sessionId] ??
+          executionModeRef.current
+        const nextMode = getCodexPermissionApprovalMode(currentMode, true)
         clearPendingDenials(sessionId)
         clearDeniedMessageContext(sessionId)
         setWaitingForInput(sessionId, false)
-        setMode(sessionId, 'yolo')
+        setMode(sessionId, nextMode)
+        invoke('broadcast_session_setting', {
+          sessionId,
+          key: 'executionMode',
+          value: nextMode,
+        }).catch(err => {
+          console.error(
+            '[useMessageHandlers] Codex broadcast executionMode=yolo failed:',
+            err
+          )
+        })
+        invoke('update_session_state', {
+          worktreeId,
+          worktreePath,
+          sessionId,
+          selectedExecutionMode: nextMode,
+        }).catch(() => undefined)
 
         requestAnimationFrame(() => {
           scrollToBottom(true)
@@ -2097,6 +2167,11 @@ export function useMessageHandlers({
           })
         }
       }
+      clearPendingDenials(sessionId)
+      clearDeniedMessageContext(sessionId)
+      setWaitingForInput(sessionId, false)
+      toast.info('Request cancelled')
+      return
     }
 
     clearPendingDenials(sessionId)

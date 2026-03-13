@@ -978,6 +978,8 @@ pub struct RecoveredRun {
     pub resumable: bool,
     /// Execution mode of the run (plan/build/yolo) for UI status restoration
     pub execution_mode: Option<String>,
+    /// Unix timestamp (seconds) when the run started — used to restore elapsed time on reload
+    pub started_at: u64,
 }
 
 /// Check for and recover incomplete runs across all sessions
@@ -1023,6 +1025,7 @@ pub fn recover_incomplete_runs(app: &tauri::AppHandle) -> Result<Vec<RecoveredRu
                         user_message: run.user_message.clone(),
                         resumable: true,
                         execution_mode: run.execution_mode.clone(),
+                        started_at: run.started_at,
                     });
 
                     log::trace!(
@@ -1057,6 +1060,7 @@ pub fn recover_incomplete_runs(app: &tauri::AppHandle) -> Result<Vec<RecoveredRu
                         user_message: run.user_message.clone(),
                         resumable: false,
                         execution_mode: run.execution_mode.clone(),
+                        started_at: run.started_at,
                     });
 
                     log::trace!(

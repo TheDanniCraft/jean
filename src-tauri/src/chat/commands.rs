@@ -4735,6 +4735,7 @@ pub async fn check_resumable_sessions(
                     user_message: run.user_message.clone(),
                     resumable: true,
                     execution_mode: run.execution_mode.clone(),
+                    started_at: run.started_at,
                 });
             }
         }

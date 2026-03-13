@@ -286,7 +286,7 @@ interface ChatUIState {
   getWorktreePath: (worktreeId: string) => string | undefined
 
   // Actions - Session-based sending state
-  addSendingSession: (sessionId: string) => void
+  addSendingSession: (sessionId: string, startTime?: number) => void
   removeSendingSession: (sessionId: string) => void
   isSending: (sessionId: string) => boolean
 
@@ -871,12 +871,12 @@ export const useChatStore = create<ChatUIState>()(
       getWorktreePath: worktreeId => get().worktreePaths[worktreeId],
 
       // Sending state (session-based)
-      addSendingSession: sessionId =>
+      addSendingSession: (sessionId, startTime) =>
         set(
           state => {
             // Guard: skip no-op updates to avoid re-renders on every streaming chunk
             if (state.sendingSessionIds[sessionId]) return state
-            const now = Date.now()
+            const now = startTime ?? Date.now()
             const { [sessionId]: _, ...restDurations } = state.completedDurations
             return {
               sendingSessionIds: {

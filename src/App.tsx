@@ -640,6 +640,7 @@ function App() {
       user_message: string
       resumable: boolean
       execution_mode: string | null
+      started_at: number
     }
 
     const cancelIdleStartupWork = scheduleIdleWork(() => {
@@ -690,7 +691,7 @@ function App() {
               worktree_id: session.worktree_id,
             })
             const store = useChatStore.getState()
-            store.addSendingSession(session.session_id)
+            store.addSendingSession(session.session_id, session.started_at * 1000)
 
             let sessionSnapshot = queryClient.getQueryData<Session>(
               chatQueryKeys.session(session.session_id)

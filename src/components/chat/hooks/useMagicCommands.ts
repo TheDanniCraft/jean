@@ -166,12 +166,11 @@ export function useMagicCommands({
       )
   }, [isModal, sessionModalOpen]) // Re-register when modal state changes
 
-  // Consume pending magic command set by MagicModal.
-  // Only the non-modal ChatWindow should consume it.
+  // Consume pending magic command set by MagicModal or ReviewCommentsDialog.
+  // Any mounted ChatWindow can consume it (cleared immediately to prevent double-processing).
   const pendingMagicCommand = useChatStore(state => state.pendingMagicCommand)
   useEffect(() => {
     if (!pendingMagicCommand) return
-    if (isModal) return
 
     useChatStore.getState().setPendingMagicCommand(null)
 

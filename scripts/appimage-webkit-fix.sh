@@ -19,8 +19,9 @@ set -eu
 
 APPDIR="$(dirname "$(readlink -f "$0")")"
 export APPDIR
-BUNDLED_LIBS="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$APPDIR/usr/lib64:$APPDIR/lib:$APPDIR/lib/x86_64-linux-gnu"
-SYSTEM_LIBS="/usr/lib:/usr/lib64:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
+ARCH_TRIPLET="$(uname -m)-linux-gnu"
+BUNDLED_LIBS="$APPDIR/usr/lib:$APPDIR/usr/lib/$ARCH_TRIPLET:$APPDIR/usr/lib64:$APPDIR/lib:$APPDIR/lib/$ARCH_TRIPLET"
+SYSTEM_LIBS="/usr/lib:/usr/lib64:/usr/lib/$ARCH_TRIPLET:/lib/$ARCH_TRIPLET"
 EXISTING_LIBS="${LD_LIBRARY_PATH:-}"
 
 # Source GTK plugin hooks (sets GDK_BACKEND, GTK_THEME, etc.)
@@ -32,7 +33,7 @@ done
 # available as fallback so AppImage-provided libs still resolve when needed.
 if [ -f /usr/lib/libwebkit2gtk-4.1.so.0 ] \
     || [ -f /usr/lib64/libwebkit2gtk-4.1.so.0 ] \
-    || [ -f /usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 ]; then
+    || [ -f "/usr/lib/$ARCH_TRIPLET/libwebkit2gtk-4.1.so.0" ]; then
     export LD_LIBRARY_PATH="$SYSTEM_LIBS:$BUNDLED_LIBS"
 else
     # Fallback: use bundled libraries (standard AppImage behavior)

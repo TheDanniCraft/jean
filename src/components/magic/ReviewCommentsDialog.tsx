@@ -167,14 +167,21 @@ ${c.diffHunk}
         })
       )
     } else {
-      // Canvas mode — navigate to chat and set pending command
+      // Canvas mode — open SessionChatModal (not bare ChatWindow) and set pending command
       const worktreeId = selectedWorktreeId
       if (worktreeId && worktree?.path) {
-        const { setActiveWorktree, setPendingMagicCommand } =
-          useChatStore.getState()
-        useProjectsStore.getState().selectWorktree(worktreeId)
-        setActiveWorktree(worktreeId, worktree.path)
-        setPendingMagicCommand({ command: 'review-comments', prompt })
+        useChatStore
+          .getState()
+          .setPendingMagicCommand({ command: 'review-comments', prompt })
+        window.dispatchEvent(
+          new CustomEvent('open-session-modal', {
+            detail: {
+              worktreeId,
+              worktreePath: worktree.path,
+              sessionId: '',
+            },
+          })
+        )
       }
     }
   }, [
@@ -191,7 +198,7 @@ ${c.diffHunk}
 
   return (
     <Dialog open={reviewCommentsModalOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+      <DialogContent className="w-[95vw] h-[90vh] max-w-none sm:max-w-none flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="size-4" />
@@ -243,7 +250,7 @@ ${c.diffHunk}
               </Button>
             </div>
 
-            <ScrollArea className="flex-1 min-h-0 max-h-[60vh] border rounded-md">
+            <ScrollArea className="flex-1 min-h-0 border rounded-md">
               <div className="divide-y">
                 {comments.map((comment, index) => {
                   const isExpanded = expanded.has(index)

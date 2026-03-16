@@ -26,6 +26,8 @@ jobs:
             args: '--target universal-apple-darwin --bundles app,dmg'
           - platform: 'ubuntu-22.04'
             args: '--bundles deb,appimage,rpm'
+          - platform: 'ubuntu-22.04-arm'
+            args: '--bundles deb,appimage,rpm'
           - platform: 'windows-latest'
             args: '--bundles msi,nsis'
 
@@ -44,7 +46,7 @@ jobs:
           sed -i.bak "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf

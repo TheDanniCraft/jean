@@ -305,6 +305,10 @@ export const ChatToolbar = memo(function ChatToolbar({
           handleModelChange={handleModelChange}
           handleEffortLevelChange={handleEffortLevelChange}
           handleThinkingLevelChange={handleThinkingLevelChange}
+          availableMcpServers={availableMcpServers}
+          enabledMcpServers={enabledMcpServers}
+          activeMcpCount={activeMcpCount}
+          onToggleMcpServer={onToggleMcpServer}
         />
 
         <DesktopToolbarControls

@@ -783,7 +783,8 @@ export function ChatWindow({
     () =>
       buildMcpConfigJson(
         mcpServersDataRef.current,
-        enabledMcpServersRef.current
+        enabledMcpServersRef.current,
+        selectedBackendRef.current
       ),
     []
   )
@@ -899,6 +900,7 @@ export function ChatWindow({
       isCodexBackendRef,
       mcpServersDataRef,
       enabledMcpServersRef,
+      selectedBackendRef,
     })
 
   // Clear context approval handler for PlanDialog
@@ -1912,6 +1914,7 @@ export function ChatWindow({
     isCodexBackendRef,
     mcpServersDataRef,
     enabledMcpServersRef,
+    selectedBackendRef,
     setInputDraft,
     sendMessageNow,
   })

@@ -6064,6 +6064,7 @@ fn generate_commit_message(
     crate::chat::claude::apply_custom_profile_settings(&mut cmd, custom_profile_name);
     cmd.args([
         "--print",
+        "--verbose",
         "--input-format",
         "stream-json",
         "--output-format",
@@ -8796,6 +8797,54 @@ pub async fn save_jean_config(project_path: String, config: JeanConfig) -> Resul
         .map_err(|e| format!("Failed to write jean.json: {e}"))?;
     log::trace!("Saved jean.json to {}", config_path.display());
     Ok(())
+}
+
+/// Response from reverting the last local commit
+#[derive(Debug, Clone, Serialize)]
+pub struct RevertCommitResponse {
+    pub commit_hash: String,
+    pub commit_message: String,
+}
+
+#[tauri::command]
+pub async fn revert_last_local_commit(worktree_path: String) -> Result<RevertCommitResponse, String> {
+    // Get the current HEAD commit hash and message before reverting
+    let log_output = silent_command("git")
+        .args(["log", "-1", "--format=%H%n%s"])
+        .current_dir(&worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to get current commit: {e}"))?;
+
+    if !log_output.status.success() {
+        let stderr = String::from_utf8_lossy(&log_output.stderr);
+        return Err(format!("No commits to revert: {stderr}"));
+    }
+
+    let log_text = String::from_utf8_lossy(&log_output.stdout);
+    let mut lines = log_text.trim().lines();
+    let commit_hash = lines.next().unwrap_or("").to_string();
+    let commit_message = lines.next().unwrap_or("").to_string();
+
+    if commit_hash.is_empty() {
+        return Err("No commits to revert".to_string());
+    }
+
+    // Reset soft: undo the commit but keep changes staged
+    let reset_output = silent_command("git")
+        .args(["reset", "--soft", "HEAD~1"])
+        .current_dir(&worktree_path)
+        .output()
+        .map_err(|e| format!("Failed to revert commit: {e}"))?;
+
+    if !reset_output.status.success() {
+        let stderr = String::from_utf8_lossy(&reset_output.stderr);
+        return Err(format!("Failed to revert commit: {stderr}"));
+    }
+
+    Ok(RevertCommitResponse {
+        commit_hash,
+        commit_message,
+    })
 }
 
 #[cfg(test)]

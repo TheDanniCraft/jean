@@ -609,24 +609,22 @@ export function ProjectCanvasView({ projectId }: ProjectCanvasViewProps) {
       const sessionData = sessionsByWorktreeId.get(worktree.id)
       const sessions = sessionData?.sessions ?? []
 
-      // Base sessions are always visible (not searchable)
-      const isBase = isBaseSession(worktree)
-
-      // Filter sessions based on search query
+      // Filter sessions based on search query (includes labels)
       const filteredSessions =
-        searchQuery.trim() && !isBase
-          ? sessions.filter(
-              session =>
-                session.name
+        searchQuery.trim()
+          ? sessions.filter(session => {
+              const q = searchQuery.toLowerCase()
+              return (
+                session.name.toLowerCase().includes(q) ||
+                worktree.name.toLowerCase().includes(q) ||
+                worktree.branch.toLowerCase().includes(q) ||
+                (session.label?.name ?? '').toLowerCase().includes(q) ||
+                (storeState.sessionLabels[session.id]?.name ?? '')
                   .toLowerCase()
-                  .includes(searchQuery.toLowerCase()) ||
-                worktree.name
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase()) ||
-                worktree.branch
-                  .toLowerCase()
-                  .includes(searchQuery.toLowerCase())
-            )
+                  .includes(q) ||
+                (worktree.label?.name ?? '').toLowerCase().includes(q)
+              )
+            })
           : sessions
 
       // Compute card data for each session
@@ -1607,7 +1605,7 @@ export function ProjectCanvasView({ projectId }: ProjectCanvasViewProps) {
     <div className="relative flex h-full flex-col">
       <div className="flex-1 flex flex-col overflow-auto">
         {/* Header with Search - sticky over content */}
-        <div className="sticky top-0 z-10 relative flex items-center gap-4 bg-background/60 backdrop-blur-md px-4 py-2 sm:py-3 border-b border-border/30 sm:min-h-[61px]">
+        <div className="sticky top-0 z-10 relative grid grid-cols-[auto_1fr_auto] items-center gap-4 bg-background/60 backdrop-blur-md px-4 py-2 sm:py-3 border-b border-border/30 sm:min-h-[61px]">
           <div className="flex flex-col shrink-0">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-lg font-semibold">{project.name}</h2>
@@ -1761,8 +1759,8 @@ export function ProjectCanvasView({ projectId }: ProjectCanvasViewProps) {
               {/* Desktop: inline search bar */}
               {!isMobile && (
                 <>
-                  <div className="flex-1 flex justify-center max-w-md mx-auto">
-                    <div className="relative w-full">
+                  <div className="flex justify-center">
+                    <div className="relative w-full max-w-md">
                       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         ref={searchInputRef}
@@ -1775,7 +1773,7 @@ export function ProjectCanvasView({ projectId }: ProjectCanvasViewProps) {
                       />
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 justify-end">
                     <OpenInButton worktreePath={project.path} />
                   </div>
                 </>

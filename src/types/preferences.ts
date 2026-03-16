@@ -1047,15 +1047,19 @@ export const fileEditModeOptions: { value: FileEditMode; label: string }[] = [
 
 export type ClaudeModel =
   | 'opus'
+  | 'claude-opus-4-6[1m]'
   | 'opus-4.5'
   | 'sonnet'
+  | 'claude-sonnet-4-6[1m]'
   | 'sonnet-4.5'
   | 'haiku'
 
 export const modelOptions: { value: ClaudeModel; label: string }[] = [
   { value: 'opus', label: 'Claude Opus 4.6' },
+  { value: 'claude-opus-4-6[1m]', label: 'Claude Opus 4.6 (1M)' },
   { value: 'opus-4.5', label: 'Claude Opus 4.5' },
   { value: 'sonnet', label: 'Claude Sonnet 4.6' },
+  { value: 'claude-sonnet-4-6[1m]', label: 'Claude Sonnet 4.6 (1M)' },
   { value: 'sonnet-4.5', label: 'Claude Sonnet 4.5' },
   { value: 'haiku', label: 'Claude Haiku' },
 ]

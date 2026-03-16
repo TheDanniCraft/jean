@@ -2517,6 +2517,7 @@ pub fn run() {
             projects::generate_pr_update_content,
             projects::update_pr_description,
             projects::create_commit_with_ai,
+            projects::revert_last_local_commit,
             projects::run_review_with_ai,
             projects::cancel_review_with_ai,
             projects::list_github_releases,

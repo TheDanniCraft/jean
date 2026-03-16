@@ -307,6 +307,13 @@ pub async fn dispatch_command(
             .await?;
             to_value(result)
         }
+        "revert_last_local_commit" => {
+            let worktree_path: String = field(&args, "worktreePath", "worktree_path")?;
+            let result =
+                crate::projects::revert_last_local_commit(worktree_path).await?;
+            emit_cache_invalidation(app, &["projects"]);
+            to_value(result)
+        }
         "run_review_with_ai" => {
             let worktree_path: String = field(&args, "worktreePath", "worktree_path")?;
             let magic_prompt: Option<String> = field_opt(&args, "magicPrompt", "magic_prompt")?;

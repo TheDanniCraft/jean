@@ -1732,6 +1732,27 @@ pub async fn dispatch_command(
             let result = crate::opencode_cli::list_opencode_models(app.clone()).await?;
             to_value(result)
         }
+        "check_gemini_cli_installed" => {
+            let result = crate::gemini_cli::check_gemini_cli_installed(app.clone()).await?;
+            to_value(result)
+        }
+        "check_gemini_cli_auth" => {
+            let result = crate::gemini_cli::check_gemini_cli_auth(app.clone()).await?;
+            to_value(result)
+        }
+        "get_gemini_usage" => {
+            let result = crate::gemini_cli::get_gemini_usage(app.clone()).await?;
+            to_value(result)
+        }
+        "get_available_gemini_versions" => {
+            let result = crate::gemini_cli::get_available_gemini_versions().await?;
+            to_value(result)
+        }
+        "install_gemini_cli" => {
+            let version: Option<String> = from_field_opt(&args, "version")?;
+            crate::gemini_cli::install_gemini_cli(app.clone(), version).await?;
+            Ok(Value::Null)
+        }
         "check_gh_cli_installed" => {
             let result = crate::gh_cli::check_gh_cli_installed(app.clone()).await?;
             to_value(result)

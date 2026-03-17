@@ -667,6 +667,129 @@ pub fn parse_run_to_message(lines: &[String], run: &RunEntry) -> Result<ChatMess
     })
 }
 
+/// Parse Gemini JSONL output into a ChatMessage.
+/// Supports both legacy and the modern stream-json format.
+pub fn parse_gemini_run_to_message(lines: &[String], run: &RunEntry) -> Result<ChatMessage, String> {
+    let mut content = String::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut content_blocks: Vec<ContentBlock> = Vec::new();
+
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        
+        // Skip leading diagnostic noise
+        let json_start = match line.find('{') {
+            Some(idx) => idx,
+            None => continue,
+        };
+
+        let msg: serde_json::Value = match serde_json::from_str(&line[json_start..]) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Handle tool_use events
+        if msg_type == "tool_use" {
+            let name = msg.get("name")
+                .or_else(|| msg.get("tool"))
+                .or_else(|| msg.get("tool_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            
+            let id = msg.get("id")
+                .or_else(|| msg.get("tool_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            let input = msg.get("input")
+                .or_else(|| msg.get("args"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            tool_calls.push(ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                input,
+                output: None,
+                parent_tool_use_id: None,
+            });
+            content_blocks.push(ContentBlock::ToolUse {
+                tool_call_id: id.to_string(),
+            });
+        }
+
+        // Handle tool_result (from user role messages)
+        if msg_type == "tool_result" {
+            if let Some(tool_id) = msg.get("id").or_else(|| msg.get("tool_id")).and_then(|v| v.as_str()) {
+                if let Some(output) = msg.get("output").or_else(|| msg.get("content")).and_then(|v| v.as_str()) {
+                    if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == tool_id) {
+                        tc.output = Some(output.to_string());
+                    }
+                }
+            }
+        }
+
+        // Handle text content (assistant only)
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        
+        // 1. stream-json format: {"type":"message","role":"assistant","content":"..."}
+        if msg_type == "message" && role == "assistant" {
+            if let Some(text) = msg.get("content").and_then(|v| v.as_str()) {
+                content.push_str(text);
+                content_blocks.push(ContentBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+        // 2. result format: {"type":"result","response":"..."}
+        else if msg_type == "result" {
+            if let Some(text) = msg.get("response").and_then(|v| v.as_str()) {
+                if content.is_empty() {
+                    content = text.to_string();
+                    content_blocks.push(ContentBlock::Text { text: text.to_string() });
+                }
+            }
+        }
+        // 3. Fallbacks for legacy/other formats
+        else if let Some(text) = msg.get("text").and_then(|v| v.as_str()).or_else(|| {
+            msg.get("message").and_then(|m| m.get("text")).and_then(|v| v.as_str())
+        }) {
+            // Only use fallback if it's an assistant message or doesn't have a role
+            if role == "assistant" || role.is_empty() {
+                content.push_str(text);
+                content_blocks.push(ContentBlock::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(ChatMessage {
+        id: run
+            .assistant_message_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
+        session_id: String::new(),
+        role: MessageRole::Assistant,
+        content,
+        timestamp: run.ended_at.unwrap_or(run.started_at),
+        tool_calls,
+        content_blocks,
+        cancelled: run.cancelled,
+        plan_approved: false,
+        model: None,
+        execution_mode: None,
+        thinking_level: None,
+        effort_level: None,
+        recovered: run.recovered,
+        usage: run.usage.clone(),
+    })
+}
+
 // ============================================================================
 // Message Loading
 // ============================================================================
@@ -745,7 +868,9 @@ pub fn load_session_messages(
                 // Legacy run without model field: fall back to session backend.
                 metadata.backend == Backend::Codex || metadata.backend == Backend::Opencode
             };
-            let mut assistant_msg = if use_codex_parser {
+            let mut assistant_msg = if metadata.backend == Backend::Gemini {
+                parse_gemini_run_to_message(&lines, run)?
+            } else if use_codex_parser {
                 super::codex::parse_codex_run_to_message(&lines, run)?
             } else {
                 parse_run_to_message(&lines, run)?

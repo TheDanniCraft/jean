@@ -52,6 +52,7 @@ tokio = { version = "1", features = ["sync", "macros"] }  # Channel for WS broad
 futures-util = "0.3"  # Stream utilities for WebSocket split
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }  # Image resize/compression on paste
 arboard = { version = "3", features = ["wayland-data-control"] }  # Native clipboard image read (Linux WebKitGTK fallback)
+chrono = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

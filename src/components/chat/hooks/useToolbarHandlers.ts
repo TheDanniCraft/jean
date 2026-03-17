@@ -21,15 +21,16 @@ interface UseToolbarHandlersParams {
   activeWorktreeIdRef: RefObject<string | null | undefined>
   activeWorktreePathRef: RefObject<string | null | undefined>
   enabledMcpServersRef: RefObject<string[]>
-  selectedBackend: 'claude' | 'codex' | 'opencode'
-  installedBackends: ('claude' | 'codex' | 'opencode')[]
+  selectedBackend: 'claude' | 'codex' | 'opencode' | 'gemini'
+  installedBackends: ('claude' | 'codex' | 'opencode' | 'gemini')[]
   session: Session | null | undefined
   preferences:
     | {
-        selected_model?: string
-        selected_codex_model?: string
-        selected_opencode_model?: string
-        custom_cli_profiles?: { name: string }[]
+      selected_model?: string
+      selected_codex_model?: string
+      selected_opencode_model?: string
+      selected_gemini_model?: string
+      custom_cli_profiles?: { name: string }[]
       }
     | undefined
   queryClient: QueryClient
@@ -106,13 +107,15 @@ export function useToolbarHandlers({
   )
 
   const handleToolbarBackendChange = useCallback(
-    (backend: 'claude' | 'codex' | 'opencode') => {
+    (backend: 'claude' | 'codex' | 'opencode' | 'gemini') => {
       if (activeSessionId && activeWorktreeId && activeWorktreePath) {
         const model =
           backend === 'codex'
             ? (preferences?.selected_codex_model ?? 'gpt-5.4')
             : backend === 'opencode'
               ? (preferences?.selected_opencode_model ?? 'opencode/gpt-5.3-codex')
+              : backend === 'gemini'
+                ? (preferences?.selected_gemini_model ?? 'auto-gemini-3')
               : ((preferences?.selected_model as string) ?? DEFAULT_MODEL)
         useChatStore.getState().setSelectedBackend(activeSessionId, backend)
         useChatStore.getState().setSelectedModel(activeSessionId, model)
@@ -165,6 +168,7 @@ export function useToolbarHandlers({
       preferences?.selected_model,
       preferences?.selected_codex_model,
       preferences?.selected_opencode_model,
+      preferences?.selected_gemini_model,
       queryClient,
       setSessionBackend,
       setSessionModel,

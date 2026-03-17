@@ -1508,7 +1508,7 @@ export default function useStreamingEvents({
       const store = useChatStore.getState()
       switch (key as SessionSettingKey) {
         case 'backend':
-          store.setSelectedBackend(session_id, value as 'claude' | 'codex' | 'opencode')
+          store.setSelectedBackend(session_id, value as 'claude' | 'codex' | 'opencode' | 'gemini')
           break
         case 'model':
           store.setSelectedModel(session_id, value)

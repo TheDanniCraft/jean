@@ -27,9 +27,9 @@ export type ThinkingLevel = 'off' | 'think' | 'megathink' | 'ultrathink'
 export type EffortLevel = 'low' | 'medium' | 'high' | 'max'
 
 /**
- * Backend for a chat session (Claude CLI, Codex CLI, or OpenCode)
+ * Backend for a chat session (Claude CLI, Codex CLI, OpenCode, or Gemini)
  */
-export type Backend = 'claude' | 'codex' | 'opencode'
+export type Backend = 'claude' | 'codex' | 'opencode' | 'gemini'
 
 /**
  * Execution mode for Claude CLI permission handling
@@ -138,6 +138,8 @@ export interface Session {
   backend?: Backend
   /** Claude CLI session ID for resuming conversations */
   claude_session_id?: string
+  /** Gemini CLI session ID for resuming conversations */
+  gemini_session_id?: string | null
   /** Codex CLI thread ID for resuming conversations */
   codex_thread_id?: string
   /** OpenCode session ID for resuming conversations */

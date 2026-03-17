@@ -1,4 +1,5 @@
-import { memo, useCallback, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { toast } from 'sonner'
 import {
   gitPush,
@@ -28,6 +29,7 @@ import { useToolbarDerivedState } from '@/components/chat/toolbar/useToolbarDeri
 import { useContextViewer } from '@/components/chat/toolbar/useContextViewer'
 import { formatOpencodeModelLabel } from '@/components/chat/toolbar/toolbar-utils'
 import { useAvailableOpencodeModels } from '@/services/opencode-cli'
+import { Button } from '@/components/ui/button'
 
 // eslint-disable-next-line react-refresh/only-export-components
 export {
@@ -111,8 +113,29 @@ export const ChatToolbar = memo(function ChatToolbar({
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
   const [thinkingDropdownOpen, setThinkingDropdownOpen] = useState(false)
   const [mcpDropdownOpen, setMcpDropdownOpen] = useState(false)
+  const [isGeminiPlanMode, setIsGeminiPlanMode] = useState(false)
 
   const pickRemoteOrRun = useRemotePicker(activeWorktreePath)
+
+  useEffect(() => {
+    let unlistenPlanMode: (() => void) | undefined
+
+    const setup = async () => {
+      try {
+        unlistenPlanMode = await listen<{ active?: boolean }>(
+          'gemini:plan_mode_changed',
+          event => {
+            setIsGeminiPlanMode(Boolean(event.payload?.active))
+          }
+        )
+      } catch (error) {
+        console.debug('[ChatToolbar] Failed to listen for Gemini plan mode:', error)
+      }
+    }
+
+    void setup()
+    return () => unlistenPlanMode?.()
+  }, [])
 
   const handleMcpDropdownOpenChange = useCallback(
     (open: boolean) => {
@@ -259,10 +282,35 @@ export const ChatToolbar = memo(function ChatToolbar({
   }, [activeWorktreePath, baseBranch, onSetDiffRequest])
 
   const canSend = hasInputValue || hasPendingAttachments
+  const handleExitGeminiPlanMode = useCallback(() => {
+    if (!activeSessionId) return
+    window.dispatchEvent(
+      new CustomEvent('set-chat-input', {
+        detail: {
+          text: 'Exit plan mode by calling the exit-plan-mode tool.',
+        },
+      })
+    )
+  }, [activeSessionId])
 
   return (
     <div className="@container flex justify-start px-4 py-2 md:px-6">
       <div className="inline-flex max-w-full flex-nowrap items-center overflow-hidden whitespace-nowrap rounded-lg bg-muted/50">
+        {selectedBackend === 'gemini' && isGeminiPlanMode && (
+          <>
+            <div className="shrink-0 px-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={handleExitGeminiPlanMode}
+              >
+                Exit Plan Mode
+              </Button>
+            </div>
+            <div className="h-4 w-px shrink-0 bg-border/50" />
+          </>
+        )}
         <MobileToolbarMenu
           isDisabled={isSending || hasPendingQuestions}
           hasOpenPr={hasOpenPr}

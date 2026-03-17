@@ -521,6 +521,7 @@ export function ChatWindow({
   const modelImpliedBackend: CliBackend | null =
     session?.selected_model?.startsWith('opencode/') ? 'opencode'
     : (session?.selected_model?.startsWith('codex') || session?.selected_model?.includes('codex')) ? 'codex'
+    : session?.selected_model?.includes('gemini') ? 'gemini'
     : null
   // Clamp to installed backends — prevents showing "Claude" when only Codex is installed
   const selectedBackend: CliBackend = modelImpliedBackend
@@ -529,12 +530,15 @@ export function ChatWindow({
       : resolvedBackend)
   const isCodexBackend = selectedBackend === 'codex'
   const isOpencodeBackend = selectedBackend === 'opencode'
+  const isGeminiBackend = selectedBackend === 'gemini'
 
   // Per-session model selection, falls back to preferences default (backend-aware)
   const defaultModel: string = isCodexBackend
     ? (preferences?.selected_codex_model ?? 'gpt-5.4')
     : isOpencodeBackend
       ? (preferences?.selected_opencode_model ?? 'opencode/gpt-5.3-codex')
+      : isGeminiBackend
+        ? (preferences?.selected_gemini_model ?? 'auto-gemini-3')
       : ((preferences?.selected_model as ClaudeModel) ?? DEFAULT_MODEL)
   const selectedModel: string = session?.selected_model ?? defaultModel
 
@@ -864,6 +868,8 @@ export function ChatWindow({
 
   // Plan state: pending plan message, streaming plan, content, file path
   const {
+    isPlanMode,
+    currentPlan,
     pendingPlanMessage,
     hasStreamingPlan,
     latestPlanContent,
@@ -874,6 +880,7 @@ export function ChatWindow({
     isSending,
     activeSessionId,
     isStreamingPlanApproved,
+    selectedBackend,
   })
 
   // State for plan dialog
@@ -881,6 +888,13 @@ export function ChatWindow({
   const [planDialogContent, setPlanDialogContent] = useState<string | null>(
     null
   )
+
+  useEffect(() => {
+    if (selectedBackend !== 'gemini') return
+    if (!isPlanMode || !currentPlan.trim()) return
+    setPlanDialogContent(currentPlan)
+    setIsPlanDialogOpen(true)
+  }, [selectedBackend, isPlanMode, currentPlan])
 
   // State for recap dialog
   const [isRecapDialogOpen, setIsRecapDialogOpen] = useState(false)
@@ -989,7 +1003,7 @@ export function ChatWindow({
       if (yoloBackend) {
         store.setSelectedBackend(
           newSession.id,
-          yoloBackend as 'claude' | 'codex' | 'opencode'
+          yoloBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
       // Optimistically update TanStack Query cache so UI shows correct backend/model immediately.
@@ -1138,7 +1152,7 @@ export function ChatWindow({
       if (buildBackend) {
         store.setSelectedBackend(
           newSession.id,
-          buildBackend as 'claude' | 'codex' | 'opencode'
+          buildBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
       // Optimistically update TanStack Query cache so UI shows correct backend/model immediately.
@@ -1354,7 +1368,7 @@ export function ChatWindow({
       if (modeBackend) {
         store.setSelectedBackend(
           newSession.id,
-          modeBackend as 'claude' | 'codex' | 'opencode'
+          modeBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
       queryClient.setQueryData<Session>(
@@ -1840,7 +1854,7 @@ export function ChatWindow({
     activeWorktreeId,
     activeWorktreePath,
     isModal,
-    latestPlanContent,
+    latestPlanContent: currentPlan || latestPlanContent,
     latestPlanFilePath,
     setPlanDialogContent,
     setIsPlanDialogOpen,

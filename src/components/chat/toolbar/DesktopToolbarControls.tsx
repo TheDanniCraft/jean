@@ -77,7 +77,7 @@ import {
 
 interface DesktopToolbarControlsProps {
   hasPendingQuestions: boolean
-  selectedBackend: 'claude' | 'codex' | 'opencode'
+  selectedBackend: 'claude' | 'codex' | 'opencode' | 'gemini'
   selectedModel: string
   selectedProvider: string | null
   selectedThinkingLevel: ThinkingLevel
@@ -125,8 +125,8 @@ interface DesktopToolbarControlsProps {
   onOpenProjectSettings?: () => void
   onResolvePrConflicts: () => void
   onLoadContext: () => void
-  installedBackends: ('claude' | 'codex' | 'opencode')[]
-  onBackendChange: (backend: 'claude' | 'codex' | 'opencode') => void
+  installedBackends: ('claude' | 'codex' | 'opencode' | 'gemini')[]
+  onBackendChange: (backend: 'claude' | 'codex' | 'opencode' | 'gemini') => void
   onSetExecutionMode: (mode: ExecutionMode) => void
   onToggleMcpServer: (name: string) => void
 
@@ -650,6 +650,8 @@ export function DesktopToolbarControls({
                         ? 'Claude'
                         : selectedBackend === 'codex'
                           ? 'Codex'
+                          : selectedBackend === 'gemini'
+                            ? 'Gemini'
                           : 'OpenCode'}
                     </span>
                     {(selectedBackend === 'codex' ||
@@ -668,7 +670,7 @@ export function DesktopToolbarControls({
               <DropdownMenuRadioGroup
                 value={selectedBackend}
                 onValueChange={v =>
-                  onBackendChange(v as 'claude' | 'codex' | 'opencode')
+                  onBackendChange(v as 'claude' | 'codex' | 'opencode' | 'gemini')
                 }
               >
                 {installedBackends.includes('claude') && (
@@ -687,6 +689,14 @@ export function DesktopToolbarControls({
                 {installedBackends.includes('opencode') && (
                   <DropdownMenuRadioItem value="opencode">
                     OpenCode
+                    <span className="ml-auto rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
+                      BETA
+                    </span>
+                  </DropdownMenuRadioItem>
+                )}
+                {installedBackends.includes('gemini') && (
+                  <DropdownMenuRadioItem value="gemini">
+                    Gemini
                     <span className="ml-auto rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
                       BETA
                     </span>

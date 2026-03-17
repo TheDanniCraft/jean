@@ -1008,7 +1008,7 @@ export function useMessageHandlers({
       if (resolvedBackend) {
         store.setSelectedBackend(
           newSession.id,
-          resolvedBackend as 'claude' | 'codex' | 'opencode'
+          resolvedBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
       // Optimistically update TanStack Query cache so UI shows correct backend/model
@@ -1219,7 +1219,7 @@ export function useMessageHandlers({
     if (resolvedBackend) {
       store.setSelectedBackend(
         newSession.id,
-        resolvedBackend as 'claude' | 'codex' | 'opencode'
+        resolvedBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
       )
     }
     // Optimistically update TanStack Query cache so UI shows correct backend/model immediately.
@@ -1527,7 +1527,7 @@ export function useMessageHandlers({
       if (resolvedBackend) {
         store.setSelectedBackend(
           newSession.id,
-          resolvedBackend as 'claude' | 'codex' | 'opencode'
+          resolvedBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
       queryClient.setQueryData<Session>(
@@ -1802,7 +1802,7 @@ export function useMessageHandlers({
     if (resolvedBackend) {
       store.setSelectedBackend(
         newSession.id,
-        resolvedBackend as 'claude' | 'codex' | 'opencode'
+        resolvedBackend as 'claude' | 'codex' | 'opencode' | 'gemini'
       )
     }
     queryClient.setQueryData<Session>(

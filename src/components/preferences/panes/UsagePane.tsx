@@ -7,6 +7,8 @@ import {
   useCodexCliStatus,
   useCodexUsage,
 } from '@/services/codex-cli'
+import { useGeminiCliAuth, useGeminiCliStatus, useGeminiUsage } from '@/services/gemini-cli'
+
 interface UsageWindow {
   usedPercent: number
   resetsAt: number | null
@@ -75,14 +77,66 @@ export const UsagePane: React.FC = () => {
   const codexUsage = useCodexUsage({
     enabled: !!codexStatus.data?.installed && !!codexAuth.data?.authenticated,
   })
+  
+  const geminiStatus = useGeminiCliStatus()
+  const geminiAuth = useGeminiCliAuth({
+    enabled: !!geminiStatus.data?.installed,
+  })
+  const geminiUsage = useGeminiUsage({
+    enabled: !!geminiStatus.data?.installed && !!geminiAuth.data?.authenticated,
+  })
 
   const codexErrorMessage = getQueryErrorMessage(
     codexUsage.error,
     'Failed to load Codex usage.'
   )
+  const geminiErrorMessage = getQueryErrorMessage(
+    geminiUsage.error,
+    'Failed to load Gemini usage.'
+  )
+  
+  // Group Gemini quotas by family
+  const groupedGeminiQuotas = React.useMemo(() => {
+    if (!geminiUsage.data?.quotas) return []
+    
+    const families: Record<string, GeminiUsageBucket> = {}
+    
+    geminiUsage.data.quotas.forEach(q => {
+      let family = 'Other'
+      const id = q.model_id.toLowerCase()
+      if (id.includes('pro')) family = 'Pro Family'
+      else if (id.includes('flash') && id.includes('lite')) family = 'Flash Lite Family'
+      else if (id.includes('flash')) family = 'Flash Family'
+      
+      // If models share the same pool, their metrics will be identical.
+      // We take the one with highest usage just in case.
+      if (!families[family] || q.usage_percent > families[family].usage_percent) {
+        families[family] = {
+          ...q,
+          model_id: family
+        }
+      }
+    })
+    
+    // Sort families: Pro, Flash, Lite
+    const order = ['Pro Family', 'Flash Family', 'Flash Lite Family']
+    return Object.values(families).sort((a, b) => {
+      const idxA = order.indexOf(a.model_id)
+      const idxB = order.indexOf(b.model_id)
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB
+      if (idxA !== -1) return -1
+      if (idxB !== -1) return 1
+      return a.model_id.localeCompare(b.model_id)
+    })
+  }, [geminiUsage.data?.quotas])
+
+  const isGeminiIdentityKnown = !!(geminiAuth.data?.email || geminiAuth.data?.project || geminiUsage.data?.plan_name || geminiUsage.data?.tier)
+
   const isRefreshing =
     codexUsage.isFetching ||
-    codexAuth.isFetching
+    codexAuth.isFetching ||
+    geminiUsage.isFetching ||
+    geminiAuth.isFetching
 
   return (
     <div className="space-y-6">
@@ -183,6 +237,95 @@ export const UsagePane: React.FC = () => {
             <p className="text-xs text-muted-foreground">
               Last updated:{' '}
               {new Date(codexUsage.data.fetchedAt * 1000).toLocaleString()}
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No usage data available.</p>
+        )}
+      </SettingsSection>
+
+      <SettingsSection title="Gemini">
+        {!geminiStatus.data?.installed ? (
+          <p className="text-sm text-muted-foreground">
+            Gemini CLI is not installed.
+          </p>
+        ) : geminiAuth.isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Checking authentication...
+          </div>
+        ) : !geminiAuth.data?.authenticated ? (
+          <p className="text-sm text-muted-foreground">
+            Gemini CLI is not authenticated. Run `gemini -i "/auth signin"` in your terminal.
+          </p>
+        ) : geminiUsage.isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading usage...
+          </div>
+        ) : geminiUsage.isError ? (
+          <div className="space-y-3">
+            <p className="text-sm text-destructive">{geminiErrorMessage}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => geminiUsage.refetch()}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          </div>
+        ) : geminiUsage.data ? (
+          <div className="space-y-5">
+            {isGeminiIdentityKnown && (
+              <div className="rounded-md border border-border p-3 space-y-2">
+                {geminiAuth.data?.email && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Account</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {geminiAuth.data.email}
+                    </p>
+                  </div>
+                )}
+                {geminiAuth.data?.project && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">GCP Project</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {geminiAuth.data.project}
+                    </p>
+                  </div>
+                )}
+                {(geminiUsage.data.plan_name || geminiUsage.data.tier) && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Plan</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {geminiUsage.data.plan_name ?? geminiUsage.data.tier}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {groupedGeminiQuotas.length > 0 ? (
+              <div className="space-y-4">
+                {groupedGeminiQuotas.map(quota => (
+                  <UsageRow
+                    key={quota.model_id}
+                    label={quota.model_id}
+                    usage={{
+                      usedPercent: quota.usage_percent,
+                      resetsAt: quota.reset_time,
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No quota buckets reported.</p>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              Last updated:{' '}
+              {new Date(geminiUsage.data.fetched_at * 1000).toLocaleString()}
             </p>
           </div>
         ) : (

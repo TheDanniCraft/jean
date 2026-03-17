@@ -49,12 +49,15 @@ export type GroupedToolCall =
  * TodoWrite and CodexTodoList are shown via dedicated todo UI.
  */
 function isSpecialTool(toolCall: ToolCall): boolean {
+  const name = toolCall.name
   return (
-    toolCall.name === 'AskUserQuestion' ||
-    toolCall.name === 'ExitPlanMode' ||
-    toolCall.name === 'EnterPlanMode' ||
-    toolCall.name === 'TodoWrite' ||
-    toolCall.name === 'CodexTodoList'
+    name === 'AskUserQuestion' ||
+    name === 'ExitPlanMode' ||
+    name === 'EnterPlanMode' ||
+    name === 'exit-plan-mode' ||
+    name === 'enter-plan-mode' ||
+    name === 'TodoWrite' ||
+    name === 'CodexTodoList'
   )
 }
 
@@ -306,7 +309,7 @@ export function buildTimeline(
         seenAskUserQuestion = true
         continue
       }
-      if (toolCall.name === 'ExitPlanMode') {
+      if (toolCall.name === 'ExitPlanMode' || toolCall.name === 'exit-plan-mode') {
         result.push({
           type: 'exitPlanMode',
           tool: toolCall,
@@ -314,7 +317,7 @@ export function buildTimeline(
         })
         continue
       }
-      if (toolCall.name === 'EnterPlanMode') {
+      if (toolCall.name === 'EnterPlanMode' || toolCall.name === 'enter-plan-mode') {
         result.push({
           type: 'enterPlanMode',
           tool: toolCall,
@@ -392,10 +395,12 @@ export function buildTimeline(
  * @returns The plan content if found, null otherwise
  */
 export function findPlanContent(toolCalls: ToolCall[]): string | null {
-  const exitPlanTool = toolCalls.find(tc => tc.name === 'ExitPlanMode')
+  const exitPlanTool = toolCalls.find(
+    tc => tc.name === 'ExitPlanMode' || tc.name === 'exit-plan-mode'
+  )
   if (!exitPlanTool) return null
-  const input = exitPlanTool.input as { plan?: string } | undefined
-  return input?.plan ?? null
+  const input = exitPlanTool.input as { plan?: string; content?: string } | undefined
+  return input?.plan ?? input?.content ?? null
 }
 
 /**

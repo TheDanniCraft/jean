@@ -30,7 +30,7 @@ interface UseMessageSendingParams {
   isCodexBackendRef: RefObject<boolean>
   mcpServersDataRef: RefObject<McpServerInfo[] | undefined>
   enabledMcpServersRef: RefObject<string[]>
-  selectedBackendRef: RefObject<'claude' | 'codex' | 'opencode'>
+  selectedBackendRef: RefObject<'claude' | 'codex' | 'opencode' | 'gemini'>
   preferences:
     | {
         custom_cli_profiles?: { name: string }[]
@@ -378,7 +378,11 @@ export function useMessageSending({
         return
       }
 
-      const message = textMessage
+      let message = textMessage
+      if (selectedBackendRef.current === 'gemini' && message.startsWith('/plan')) {
+        const planQuery = message.replace(/^\/plan\s*/, '').trim()
+        message = `Use the enter-plan-mode tool and draft a comprehensive plan for: ${planQuery || 'the user request'}`
+      }
 
       if (
         images.length > 0 ||

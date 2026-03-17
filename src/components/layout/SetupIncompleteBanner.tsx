@@ -1,6 +1,7 @@
 import { useClaudeCliStatus, useClaudeCliAuth } from '@/services/claude-cli'
 import { useCodexCliStatus, useCodexCliAuth } from '@/services/codex-cli'
 import { useOpencodeCliStatus, useOpencodeCliAuth } from '@/services/opencode-cli'
+import { useGeminiCliStatus, useGeminiCliAuth } from '@/services/gemini-cli'
 import { useGhCliStatus, useGhCliAuth } from '@/services/gh-cli'
 import { useUIStore } from '@/store/ui-store'
 import { isNativeApp } from '@/lib/environment'
@@ -13,11 +14,13 @@ export function SetupIncompleteBanner() {
   const claudeStatus = useClaudeCliStatus()
   const codexStatus = useCodexCliStatus()
   const opencodeStatus = useOpencodeCliStatus()
+  const geminiStatus = useGeminiCliStatus()
   const ghStatus = useGhCliStatus()
 
   const claudeAuth = useClaudeCliAuth({ enabled: !!claudeStatus.data?.installed })
   const codexAuth = useCodexCliAuth({ enabled: !!codexStatus.data?.installed })
   const opencodeAuth = useOpencodeCliAuth({ enabled: !!opencodeStatus.data?.installed })
+  const geminiAuth = useGeminiCliAuth({ enabled: !!geminiStatus.data?.installed })
   const ghAuth = useGhCliAuth({ enabled: !!ghStatus.data?.installed })
 
   if (!isNativeApp()) return null
@@ -26,7 +29,7 @@ export function SetupIncompleteBanner() {
 
   const isLoading =
     claudeStatus.isLoading || codexStatus.isLoading ||
-    opencodeStatus.isLoading || ghStatus.isLoading
+    opencodeStatus.isLoading || geminiStatus.isLoading || ghStatus.isLoading
 
   if (isLoading) {
     return (
@@ -41,7 +44,8 @@ export function SetupIncompleteBanner() {
   const hasAiBackendReady =
     (!!claudeStatus.data?.installed && !!claudeAuth.data?.authenticated) ||
     (!!codexStatus.data?.installed && !!codexAuth.data?.authenticated) ||
-    (!!opencodeStatus.data?.installed && !!opencodeAuth.data?.authenticated)
+    (!!opencodeStatus.data?.installed && !!opencodeAuth.data?.authenticated) ||
+    (!!geminiStatus.data?.installed && !!geminiAuth.data?.authenticated)
 
   // Everything is set up — no banner needed
   if (ghReady && hasAiBackendReady) return null

@@ -50,6 +50,12 @@ import {
   opencodeCliQueryKeys,
   useOpenCodePathDetection,
 } from '@/services/opencode-cli'
+import {
+  useGeminiCliStatus,
+  useGeminiCliAuth,
+  useAvailableGeminiVersions,
+  geminiCliQueryKeys,
+} from '@/services/gemini-cli'
 import { useUIStore } from '@/store/ui-store'
 import type { ClaudeAuthStatus } from '@/types/claude-cli'
 import type { GhAuthStatus } from '@/types/gh-cli'
@@ -213,14 +219,24 @@ export const GeneralPane: React.FC = () => {
     isNewerVersion(codexLatestStable.version, codexStatus.version)
   const { data: opencodeStatus, isLoading: isOpenCodeLoading } =
     useOpenCodeCliStatus()
+  const { data: geminiStatus, isLoading: isGeminiLoading } =
+    useGeminiCliStatus()
   const isOpencodePathSource = preferences?.opencode_cli_source === 'path'
+  const isGeminiPathSource = preferences?.gemini_cli_source === 'path'
   const { data: opencodeVersions, isLoading: isOpencodeVersionsLoading } =
     useAvailableOpencodeVersions({ enabled: isOpencodePathSource && !!opencodeStatus?.installed })
+  const { data: geminiVersions, isLoading: isGeminiVersionsLoading } =
+    useAvailableGeminiVersions({ enabled: isGeminiPathSource && !!geminiStatus?.installed })
   const opencodeLatestStable = opencodeVersions?.find(v => !v.prerelease)
+  const geminiLatestStable = geminiVersions?.find(v => !v.prerelease)
   const opencodeHasUpdate =
     !!opencodeStatus?.version &&
     !!opencodeLatestStable &&
     isNewerVersion(opencodeLatestStable.version, opencodeStatus.version)
+  const geminiHasUpdate =
+    !!geminiStatus?.version &&
+    !!geminiLatestStable &&
+    isNewerVersion(geminiLatestStable.version, geminiStatus.version)
 
   // Auth status queries - only enabled when CLI is installed
   const { data: claudeAuth, isLoading: isClaudeAuthLoading } = useClaudeCliAuth(
@@ -238,6 +254,11 @@ export const GeneralPane: React.FC = () => {
     useOpenCodeCliAuth({
       enabled: !!opencodeStatus?.installed,
     })
+  const { data: geminiAuth, isLoading: isGeminiAuthLoading } = useGeminiCliAuth(
+    {
+      enabled: !!geminiStatus?.installed,
+    }
+  )
   const { data: availableOpencodeModels } = useAvailableOpencodeModels({
     enabled: !!opencodeStatus?.installed,
   })
@@ -283,6 +304,7 @@ export const GeneralPane: React.FC = () => {
   const [checkingGhAuth, setCheckingGhAuth] = useState(false)
   const [checkingCodexAuth, setCheckingCodexAuth] = useState(false)
   const [checkingOpenCodeAuth, setCheckingOpenCodeAuth] = useState(false)
+  const [checkingGeminiAuth, setCheckingGeminiAuth] = useState(false)
   const [openCodeModelPopoverOpen, setOpenCodeModelPopoverOpen] =
     useState(false)
   const [buildModelPopoverOpen, setBuildModelPopoverOpen] = useState(false)
@@ -726,6 +748,36 @@ export const GeneralPane: React.FC = () => {
     openCliLoginModal('opencode', opencodeStatus.path, ['auth', 'login'])
   }, [opencodeStatus?.path, openCliLoginModal])
 
+  const handleGeminiLogin = useCallback(async () => {
+    if (!geminiStatus?.path) return
+
+    setCheckingGeminiAuth(true)
+    try {
+      await queryClient.invalidateQueries({
+        queryKey: geminiCliQueryKeys.auth(),
+      })
+      const result = await queryClient.fetchQuery({
+        queryKey: geminiCliQueryKeys.auth(),
+      })
+
+      if (result.authenticated) {
+        toast.success('Gemini CLI: Successfully authenticated')
+      } else {
+        openCliLoginModal('gemini', geminiStatus.path, ['-i', '/auth signin'])
+      }
+    } catch (error) {
+      console.error('Failed to check Gemini auth:', error)
+      openCliLoginModal('gemini', geminiStatus.path, ['-i', '/auth signin'])
+    } finally {
+      setCheckingGeminiAuth(false)
+    }
+  }, [geminiStatus?.path, queryClient, openCliLoginModal])
+
+  const handleGeminiRelogin = useCallback(() => {
+    if (!geminiStatus?.path) return
+    openCliLoginModal('gemini', geminiStatus.path, ['-i', '/auth signin'])
+  }, [geminiStatus?.path, openCliLoginModal])
+
 
 
   const handleCopyPath = useCallback((path: string | null | undefined) => {
@@ -1125,6 +1177,87 @@ export const GeneralPane: React.FC = () => {
         <SettingsSection
           title={
             <>
+              Gemini CLI{' '}
+              <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
+                BETA
+              </span>
+            </>
+          }
+          actions={
+            geminiStatus?.installed ? (
+              checkingGeminiAuth || isGeminiAuthLoading ? (
+                <span className="text-sm text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="size-3 animate-spin" />
+                  Checking...
+                </span>
+              ) : geminiAuth?.authenticated ? (
+                <span className="text-sm text-muted-foreground flex items-center gap-2">
+                  Logged in
+                  <Button variant="outline" size="sm" onClick={handleGeminiRelogin}>
+                    Relogin
+                  </Button>
+                </span>
+              ) : (
+                <Button variant="outline" size="sm" onClick={handleGeminiLogin}>
+                  Login
+                </Button>
+              )
+            ) : (
+              <span className="text-sm text-muted-foreground">
+                Not installed
+              </span>
+            )
+          }
+        >
+          <div className="space-y-4">
+            <InlineField
+              label={geminiStatus?.installed ? 'Version' : 'Status'}
+              description={
+                geminiStatus?.installed
+                  ? 'Enables Gemini AI sessions'
+                  : 'Optional — enables Gemini AI sessions'
+              }
+            >
+              {isGeminiLoading ? (
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+              ) : geminiStatus?.installed ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">
+                    {geminiStatus.version ?? 'Installed'}
+                  </span>
+                  {isGeminiVersionsLoading ? (
+                    <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!geminiHasUpdate}
+                      onClick={() => openCliUpdateModal('gemini')}
+                    >
+                      {geminiHasUpdate
+                        ? `Update to ${geminiLatestStable?.version}`
+                        : 'Up to date'}
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openCliUpdateModal('gemini')}
+                >
+                  Install Gemini CLI
+                </Button>
+              )}
+            </InlineField>
+          </div>
+        </SettingsSection>
+      )}
+
+      {isNativeApp() && (
+        <SettingsSection
+          title={
+            <>
               OpenCode CLI{' '}
               <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
                 BETA
@@ -1274,7 +1407,9 @@ export const GeneralPane: React.FC = () => {
                       ? cliStatus?.installed
                       : option.value === 'codex'
                         ? codexStatus?.installed
-                        : opencodeStatus?.installed
+                        : option.value === 'gemini'
+                          ? geminiStatus?.installed
+                          : opencodeStatus?.installed
                   )
                   .map(option => (
                     <SelectItem key={option.value} value={option.value}>

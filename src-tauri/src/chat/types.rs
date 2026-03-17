@@ -93,7 +93,7 @@ pub struct UsageData {
 // Message Types
 // ============================================================================
 
-/// Backend for a chat session (Claude CLI, Codex CLI, or OpenCode)
+/// Backend for a chat session (Claude CLI, Codex CLI, OpenCode, or Gemini)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
@@ -101,6 +101,7 @@ pub enum Backend {
     Claude,
     Codex,
     Opencode,
+    Gemini,
 }
 
 /// Role of a chat message sender
@@ -366,12 +367,15 @@ pub struct Session {
     /// Message count (populated separately for efficiency when full messages not needed)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_count: Option<u32>,
-    /// Backend for this session (claude, codex, or opencode)
+    /// Backend for this session (claude, codex, opencode, or gemini)
     #[serde(default)]
     pub backend: Backend,
     /// Claude CLI session ID for resuming conversations
     #[serde(default)]
     pub claude_session_id: Option<String>,
+    /// Gemini CLI session ID for resuming conversations
+    #[serde(default)]
+    pub gemini_session_id: Option<String>,
     /// Codex CLI thread ID for resuming conversations
     #[serde(default)]
     pub codex_thread_id: Option<String>,
@@ -494,6 +498,7 @@ impl Session {
             message_count: None,
             backend,
             claude_session_id: None,
+            gemini_session_id: None,
             codex_thread_id: None,
             opencode_session_id: None,
             selected_model: None,
@@ -675,6 +680,7 @@ impl SessionMetadata {
             message_count: Some(self.to_index_entry().message_count),
             backend: self.backend.clone(),
             claude_session_id: self.claude_session_id.clone(),
+            gemini_session_id: self.gemini_session_id.clone(),
             codex_thread_id: self.codex_thread_id.clone(),
             opencode_session_id: self.opencode_session_id.clone(),
             selected_model: self.selected_model.clone(),
@@ -713,6 +719,7 @@ impl SessionMetadata {
         self.order = session.order;
         self.backend = session.backend.clone();
         self.claude_session_id = session.claude_session_id.clone();
+        self.gemini_session_id = session.gemini_session_id.clone();
         self.codex_thread_id = session.codex_thread_id.clone();
         self.opencode_session_id = session.opencode_session_id.clone();
         self.selected_model = session.selected_model.clone();
@@ -969,12 +976,15 @@ pub struct SessionMetadata {
     pub order: u32,
     /// Unix timestamp when session was created
     pub created_at: u64,
-    /// Backend for this session (claude, codex, or opencode)
+    /// Backend for this session (claude, codex, opencode, or gemini)
     #[serde(default)]
     pub backend: Backend,
     /// Claude CLI session ID for resuming conversations
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
+    /// Gemini CLI session ID for resuming conversations
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_session_id: Option<String>,
     /// Codex CLI thread ID for resuming conversations
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_thread_id: Option<String>,
@@ -1131,6 +1141,7 @@ impl SessionMetadata {
                 .as_secs(),
             backend: Backend::default(),
             claude_session_id: None,
+            gemini_session_id: None,
             codex_thread_id: None,
             opencode_session_id: None,
             selected_model: None,

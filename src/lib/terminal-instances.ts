@@ -192,6 +192,25 @@ export function getOrCreateTerminal(
 }
 
 /**
+ * Register a listener for terminal output data.
+ */
+export function registerOutputListener(
+  terminalId: string,
+  callback: (data: string) => void
+): UnlistenFn {
+  let unlistenFn: UnlistenFn = () => {}
+  listen<TerminalOutputEvent>('terminal:output', event => {
+    if (event.payload.terminal_id === terminalId) {
+      callback(event.payload.data)
+    }
+  }).then(fn => {
+    unlistenFn = fn
+  })
+
+  return () => unlistenFn()
+}
+
+/**
  * Get terminal instance by ID.
  */
 export function getInstance(

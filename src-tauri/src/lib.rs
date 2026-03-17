@@ -12,6 +12,7 @@ mod background_tasks;
 mod chat;
 mod claude_cli;
 mod codex_cli;
+mod gemini_cli;
 mod gh_cli;
 pub mod http_server;
 mod opencode_cli;
@@ -187,11 +188,13 @@ pub struct AppPreferences {
     #[serde(default = "default_execution_mode")]
     pub default_execution_mode: String, // Default execution mode: "plan", "build", or "yolo"
     #[serde(default = "default_backend")]
-    pub default_backend: String, // Default CLI backend: "claude", "codex", or "opencode"
+    pub default_backend: String, // Default CLI backend: "claude", "codex", "opencode", or "gemini"
     #[serde(default = "default_codex_model")]
     pub selected_codex_model: String, // Default Codex model
     #[serde(default = "default_opencode_model")]
     pub selected_opencode_model: String, // Default OpenCode model (provider/model)
+    #[serde(default = "default_gemini_model")]
+    pub selected_gemini_model: String, // Default Gemini model
     #[serde(default = "default_codex_reasoning_effort")]
     pub default_codex_reasoning_effort: String, // Codex reasoning effort: low, medium, high, xhigh
     #[serde(default)]
@@ -398,6 +401,10 @@ fn default_codex_model() -> String {
 
 fn default_opencode_model() -> String {
     "opencode/gpt-5.3-codex".to_string()
+}
+
+fn default_gemini_model() -> String {
+    "auto-gemini-3".to_string()
 }
 
 fn default_codex_reasoning_effort() -> String {
@@ -1130,6 +1137,7 @@ impl Default for AppPreferences {
             default_backend: default_backend(),
             selected_codex_model: default_codex_model(),
             selected_opencode_model: default_opencode_model(),
+            selected_gemini_model: default_gemini_model(),
             default_codex_reasoning_effort: default_codex_reasoning_effort(),
             codex_multi_agent_enabled: false,
             codex_max_agent_threads: default_codex_max_agent_threads(),
@@ -2840,6 +2848,12 @@ pub fn run() {
             opencode_cli::get_available_opencode_versions,
             opencode_cli::install_opencode_cli,
             opencode_cli::list_opencode_models,
+            // Gemini CLI management commands
+            gemini_cli::check_gemini_cli_installed,
+            gemini_cli::check_gemini_cli_auth,
+            gemini_cli::get_gemini_usage,
+            gemini_cli::get_available_gemini_versions,
+            gemini_cli::install_gemini_cli,
             // GitHub CLI management commands
             gh_cli::check_gh_cli_installed,
             gh_cli::detect_gh_in_path,

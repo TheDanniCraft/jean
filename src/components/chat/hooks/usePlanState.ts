@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
 import { isExitPlanMode } from '@/types/chat'
-import type { ToolCall, ChatMessage } from '@/types/chat'
+import type { Backend, ToolCall, ChatMessage } from '@/types/chat'
 import { findPlanFilePath, findPlanContent } from '../tool-call-utils'
 
 interface UsePlanStateParams {
@@ -9,6 +10,7 @@ interface UsePlanStateParams {
   isSending: boolean
   activeSessionId: string | null | undefined
   isStreamingPlanApproved: (sessionId: string) => boolean
+  selectedBackend?: Backend
 }
 
 /**
@@ -20,7 +22,56 @@ export function usePlanState({
   isSending,
   activeSessionId,
   isStreamingPlanApproved,
+  selectedBackend,
 }: UsePlanStateParams) {
+  const [isPlanMode, setIsPlanMode] = useState(false)
+  const [currentPlan, setCurrentPlan] = useState('')
+
+  useEffect(() => {
+    let unlistenMode: (() => void) | undefined
+    let unlistenPlan: (() => void) | undefined
+
+    const setupListeners = async () => {
+      try {
+        unlistenMode = await listen<{ active?: boolean }>(
+          'gemini:plan_mode_changed',
+          event => {
+            if (selectedBackend !== 'gemini') return
+            setIsPlanMode(Boolean(event.payload?.active))
+          }
+        )
+      } catch (error) {
+        console.debug('[usePlanState] Failed to listen for Gemini plan mode:', error)
+      }
+
+      try {
+        unlistenPlan = await listen<{ content?: string }>(
+          'gemini:plan_updated',
+          event => {
+            if (selectedBackend !== 'gemini') return
+            setCurrentPlan(event.payload?.content ?? '')
+          }
+        )
+      } catch (error) {
+        console.debug('[usePlanState] Failed to listen for Gemini plan updates:', error)
+      }
+    }
+
+    void setupListeners()
+
+    return () => {
+      unlistenMode?.()
+      unlistenPlan?.()
+    }
+  }, [selectedBackend])
+
+  useEffect(() => {
+    if (selectedBackend !== 'gemini') {
+      setIsPlanMode(false)
+      setCurrentPlan('')
+    }
+  }, [selectedBackend])
+
   // Returns the message that has an unapproved plan awaiting action, if any
   const pendingPlanMessage = useMemo(() => {
     const messages = sessionMessages ?? []
@@ -83,6 +134,8 @@ export function usePlanState({
   }, [sessionMessages])
 
   return {
+    isPlanMode,
+    currentPlan,
     pendingPlanMessage,
     hasStreamingPlan,
     latestPlanContent,

@@ -625,8 +625,27 @@ function FileChangeDiffView({ input }: { input: unknown }) {
 
 function getToolDisplay(toolCall: ToolCall): ToolDisplay {
   const input = toolCall.input as Record<string, unknown>
+  const rawName = toolCall.name
 
-  switch (toolCall.name) {
+  // Normalize Gemini snake_case tool names to Jean's PascalCase tool names
+  const name =
+    rawName === 'read_file'
+      ? 'Read'
+      : rawName === 'write_file'
+        ? 'Write'
+        : rawName === 'edit_file'
+          ? 'Edit'
+          : rawName === 'grep_search'
+            ? 'Grep'
+            : rawName === 'glob'
+              ? 'Glob'
+              : rawName === 'bash'
+                ? 'Bash'
+                : rawName === 'codebase_investigator' || rawName === 'generalist'
+                  ? 'Agent'
+                  : rawName
+
+  switch (name) {
     case 'Read': {
       const filePath = input.file_path as string | undefined
       const filename = filePath ? getFilename(filePath) : filePath

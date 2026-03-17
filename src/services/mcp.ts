@@ -234,6 +234,7 @@ export const BACKEND_LABELS: Record<CliBackend, string> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  gemini: 'Gemini',
 }
 
 /** Group servers by their backend field */

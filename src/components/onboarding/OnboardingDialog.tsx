@@ -26,6 +26,7 @@ import {
   useOpenCodeCliAuth,
   useOpenCodePathDetection,
 } from '@/services/opencode-cli'
+import { useGeminiCliSetup, useGeminiCliAuth } from '@/services/gemini-cli'
 import { useGhCliSetup, useGhCliAuth, useGhPathDetection } from '@/services/gh-cli'
 import {
   SetupState,
@@ -38,10 +39,10 @@ import {
 import { toast } from 'sonner'
 import { usePreferences, usePatchPreferences } from '@/services/preferences'
 
-type AIBackend = 'claude' | 'codex' | 'opencode'
+type AIBackend = 'claude' | 'codex' | 'opencode' | 'gemini'
 type CliType = AIBackend | 'gh'
 
-const AI_BACKENDS: AIBackend[] = ['claude', 'codex', 'opencode']
+const AI_BACKENDS: AIBackend[] = ['claude', 'codex', 'opencode', 'gemini']
 
 type OnboardingStep =
   | 'backend-select'
@@ -57,6 +58,10 @@ type OnboardingStep =
   | 'opencode-installing'
   | 'opencode-auth-checking'
   | 'opencode-auth-login'
+  | 'gemini-setup'
+  | 'gemini-installing'
+  | 'gemini-auth-checking'
+  | 'gemini-auth-login'
   | 'gh-setup'
   | 'gh-installing'
   | 'gh-auth-checking'
@@ -94,6 +99,7 @@ const backendLabel: Record<CliType, string> = {
   claude: 'Claude CLI',
   codex: 'Codex CLI',
   opencode: 'OpenCode CLI',
+  gemini: 'Gemini CLI',
   gh: 'GitHub CLI',
 }
 
@@ -101,6 +107,7 @@ function stepToBackend(step: OnboardingStep): AIBackend | null {
   if (step.startsWith('claude-')) return 'claude'
   if (step.startsWith('codex-')) return 'codex'
   if (step.startsWith('opencode-')) return 'opencode'
+  if (step.startsWith('gemini-')) return 'gemini'
   return null
 }
 
@@ -133,6 +140,7 @@ function OnboardingDialogContent() {
   const opencodePathDetection = useOpenCodePathDetection()
   const codexSetup = useCodexCliSetup()
   const opencodeSetup = useOpenCodeCliSetup()
+  const geminiSetup = useGeminiCliSetup()
   const ghPathDetection = useGhPathDetection()
   const ghSetup = useGhCliSetup()
 
@@ -142,6 +150,9 @@ function OnboardingDialogContent() {
   const codexAuth = useCodexCliAuth({ enabled: !!codexSetup.status?.installed })
   const opencodeAuth = useOpenCodeCliAuth({
     enabled: !!opencodeSetup.status?.installed,
+  })
+  const geminiAuth = useGeminiCliAuth({
+    enabled: !!geminiSetup.status?.installed,
   })
   const ghAuth = useGhCliAuth({ enabled: !!ghSetup.status?.installed })
 
@@ -159,10 +170,12 @@ function OnboardingDialogContent() {
   const [codexVersion, setCodexVersion] = useState<string | null>(null)
   const [opencodeVersion, setOpencodeVersion] = useState<string | null>(null)
   const [ghVersion, setGhVersion] = useState<string | null>(null)
+  const [geminiVersion, setGeminiVersion] = useState<string | null>(null)
 
   const [claudeInstallFailed, setClaudeInstallFailed] = useState(false)
   const [codexInstallFailed, setCodexInstallFailed] = useState(false)
   const [opencodeInstallFailed, setOpencodeInstallFailed] = useState(false)
+  const [geminiInstallFailed, setGeminiInstallFailed] = useState(false)
   const [ghInstallFailed, setGhInstallFailed] = useState(false)
   const [claudePathSelected, setClaudePathSelected] = useState(false)
   const [codexPathSelected, setCodexPathSelected] = useState(false)
@@ -171,6 +184,7 @@ function OnboardingDialogContent() {
   const [claudeLoginAttempt, setClaudeLoginAttempt] = useState(0)
   const [codexLoginAttempt, setCodexLoginAttempt] = useState(0)
   const [opencodeLoginAttempt, setOpencodeLoginAttempt] = useState(0)
+  const [geminiLoginAttempt, setGeminiLoginAttempt] = useState(0)
   const [ghLoginAttempt, setGhLoginAttempt] = useState(0)
 
   const initializedFlowRef = useRef(false)
@@ -184,6 +198,7 @@ function OnboardingDialogContent() {
   const claudeLoginTerminalId = `onboarding-claude-login-${loginSessionSeed}-${claudeLoginAttempt}`
   const codexLoginTerminalId = `onboarding-codex-login-${loginSessionSeed}-${codexLoginAttempt}`
   const opencodeLoginTerminalId = `onboarding-opencode-login-${loginSessionSeed}-${opencodeLoginAttempt}`
+  const geminiLoginTerminalId = `onboarding-gemini-login-${loginSessionSeed}-${geminiLoginAttempt}`
   const ghLoginTerminalId = `onboarding-gh-login-${loginSessionSeed}-${ghLoginAttempt}`
 
   const stableClaudeVersions = claudeSetup.versions.filter(v => !v.prerelease)
@@ -192,6 +207,7 @@ function OnboardingDialogContent() {
     v => !v.prerelease
   )
   const stableGhVersions = ghSetup.versions.filter(v => !v.prerelease)
+  const stableGeminiVersions = geminiSetup.versions.filter(v => !v.prerelease)
 
   useEffect(() => {
     if (!claudeVersion && stableClaudeVersions.length > 0) {
@@ -223,6 +239,14 @@ function OnboardingDialogContent() {
     }
   }, [ghVersion, stableGhVersions])
 
+  useEffect(() => {
+    if (!geminiVersion && stableGeminiVersions.length > 0) {
+      queueMicrotask(() =>
+        setGeminiVersion(stableGeminiVersions[0]?.version ?? null)
+      )
+    }
+  }, [geminiVersion, stableGeminiVersions])
+
   const isBackendReady = useCallback(
     (backend: AIBackend) => {
       let ready = false
@@ -230,8 +254,10 @@ function OnboardingDialogContent() {
         ready = !!claudeSetup.status?.installed && !!claudeAuth.data?.authenticated
       } else if (backend === 'codex') {
         ready = !!codexSetup.status?.installed && !!codexAuth.data?.authenticated
-      } else {
+      } else if (backend === 'opencode') {
         ready = !!opencodeSetup.status?.installed && !!opencodeAuth.data?.authenticated
+      } else {
+        ready = !!geminiSetup.status?.installed && !!geminiAuth.data?.authenticated
       }
       dbg('isBackendReady:', backend, '→', ready)
       return ready
@@ -243,6 +269,8 @@ function OnboardingDialogContent() {
       codexAuth.data?.authenticated,
       opencodeSetup.status?.installed,
       opencodeAuth.data?.authenticated,
+      geminiSetup.status?.installed,
+      geminiAuth.data?.authenticated,
     ]
   )
 
@@ -255,13 +283,30 @@ function OnboardingDialogContent() {
       } else if (backend === 'codex') {
         if (!codexSetup.status?.installed) result = 'codex-setup'
         else if (!codexAuth.data?.authenticated) result = 'codex-auth-checking'
-      } else {
+      } else if (backend === 'opencode') {
         if (!opencodeSetup.status?.installed) result = 'opencode-setup'
         else if (!opencodeAuth.data?.authenticated) result = 'opencode-auth-checking'
+      } else {
+        if (!geminiSetup.status?.installed) result = 'gemini-setup'
+        else if (!geminiAuth.data?.authenticated) result = 'gemini-auth-checking'
       }
       dbg('getNextStepForBackend:', backend, '→', result, {
-        installed: backend === 'claude' ? claudeSetup.status?.installed : backend === 'codex' ? codexSetup.status?.installed : opencodeSetup.status?.installed,
-        authenticated: backend === 'claude' ? claudeAuth.data?.authenticated : backend === 'codex' ? codexAuth.data?.authenticated : opencodeAuth.data?.authenticated,
+        installed:
+          backend === 'claude'
+            ? claudeSetup.status?.installed
+            : backend === 'codex'
+              ? codexSetup.status?.installed
+              : backend === 'opencode'
+                ? opencodeSetup.status?.installed
+                : geminiSetup.status?.installed,
+        authenticated:
+          backend === 'claude'
+            ? claudeAuth.data?.authenticated
+            : backend === 'codex'
+              ? codexAuth.data?.authenticated
+              : backend === 'opencode'
+                ? opencodeAuth.data?.authenticated
+                : geminiAuth.data?.authenticated,
       })
       return result
     },
@@ -272,6 +317,8 @@ function OnboardingDialogContent() {
       codexAuth.data?.authenticated,
       opencodeSetup.status?.installed,
       opencodeAuth.data?.authenticated,
+      geminiSetup.status?.installed,
+      geminiAuth.data?.authenticated,
     ]
   )
 
@@ -308,6 +355,7 @@ function OnboardingDialogContent() {
     claudeSetup.isStatusLoading ||
     codexSetup.isStatusLoading ||
     opencodeSetup.isStatusLoading ||
+    geminiSetup.isStatusLoading ||
     ghSetup.isStatusLoading ||
     (claudeSetup.status?.installed &&
       (claudeAuth.isLoading || claudeAuth.isFetching)) ||
@@ -315,6 +363,8 @@ function OnboardingDialogContent() {
       (codexAuth.isLoading || codexAuth.isFetching)) ||
     (opencodeSetup.status?.installed &&
       (opencodeAuth.isLoading || opencodeAuth.isFetching)) ||
+    (geminiSetup.status?.installed &&
+      (geminiAuth.isLoading || geminiAuth.isFetching)) ||
     (ghSetup.status?.installed && (ghAuth.isLoading || ghAuth.isFetching))
 
   dbg('loadingInitialState:', loadingInitialState, {
@@ -350,6 +400,7 @@ function OnboardingDialogContent() {
       setClaudeInstallFailed(false)
       setCodexInstallFailed(false)
       setOpencodeInstallFailed(false)
+      setGeminiInstallFailed(false)
       setGhInstallFailed(false)
       setClaudePathSelected(false)
       setCodexPathSelected(false)
@@ -358,6 +409,7 @@ function OnboardingDialogContent() {
       setClaudeLoginAttempt(0)
       setCodexLoginAttempt(0)
       setOpencodeLoginAttempt(0)
+      setGeminiLoginAttempt(0)
       setGhLoginAttempt(0)
     })
 
@@ -525,6 +577,25 @@ function OnboardingDialogContent() {
     opencodeAuth.fetchStatus,
     opencodeAuth.error,
     opencodeSetup.status?.installed,
+    moveToNextBackendOrGh,
+    setStep,
+  ])
+
+  useEffect(() => {
+    if (step !== 'gemini-auth-checking') return
+    if (geminiAuth.isLoading || geminiAuth.isFetching) return
+
+    if (geminiAuth.data?.authenticated) {
+      queueMicrotask(() => moveToNextBackendOrGh('gemini'))
+    } else {
+      queueMicrotask(() => setStep('gemini-auth-login'))
+    }
+  }, [
+    step,
+    geminiAuth.isLoading,
+    geminiAuth.isFetching,
+    geminiAuth.data?.authenticated,
+    geminiAuth.error,
     moveToNextBackendOrGh,
     setStep,
   ])
@@ -736,6 +807,21 @@ function OnboardingDialogContent() {
     })
   }, [ghVersion, ghSetup, ghAuth])
 
+  const handleGeminiInstall = useCallback(() => {
+    if (!geminiVersion) return
+    setStep('gemini-installing')
+    geminiSetup.install(geminiVersion, {
+      onSuccess: () => {
+        setStep('gemini-auth-checking')
+        geminiAuth.refetch()
+      },
+      onError: () => {
+        setGeminiInstallFailed(true)
+        setStep('gemini-setup')
+      },
+    })
+  }, [geminiVersion, geminiSetup, geminiAuth])
+
   const handleClaudeLoginComplete = useCallback(async () => {
     dbg('handleClaudeLoginComplete: refetching auth')
     setStep('claude-auth-checking')
@@ -764,6 +850,11 @@ function OnboardingDialogContent() {
     dbg('handleGhLoginComplete: refetch result =', result.data)
   }, [ghAuth, setStep])
 
+  const handleGeminiLoginComplete = useCallback(async () => {
+    setStep('gemini-auth-checking')
+    await geminiAuth.refetch()
+  }, [geminiAuth])
+
   const handleClaudeLoginRetry = useCallback(() => {
     setClaudeLoginAttempt(prev => prev + 1)
   }, [])
@@ -780,10 +871,15 @@ function OnboardingDialogContent() {
     setGhLoginAttempt(prev => prev + 1)
   }, [])
 
+  const handleGeminiLoginRetry = useCallback(() => {
+    setGeminiLoginAttempt(prev => prev + 1)
+  }, [])
+
   const handleComplete = useCallback(() => {
     claudeSetup.refetchStatus()
     codexSetup.refetchStatus()
     opencodeSetup.refetchStatus()
+    geminiSetup.refetchStatus()
     ghSetup.refetchStatus()
     // Set the first selected backend as the default so the preference
     // isn't left pointing at an uninstalled backend (e.g. 'claude').
@@ -801,6 +897,7 @@ function OnboardingDialogContent() {
     claudeSetup,
     codexSetup,
     opencodeSetup,
+    geminiSetup,
     ghSetup,
     selectedBackends,
     preferences,
@@ -876,6 +973,23 @@ function OnboardingDialogContent() {
       }
     }
 
+    if (step === 'gemini-setup' || step === 'gemini-installing') {
+      return {
+        type: 'gemini',
+        title: 'Gemini CLI',
+        description: 'Gemini CLI enables Google-backed AI sessions.',
+        versions: stableGeminiVersions,
+        isVersionsLoading: geminiSetup.isVersionsLoading,
+        isVersionsError: geminiSetup.isVersionsError,
+        onRetryVersions: geminiSetup.refetchVersions,
+        isInstalling: geminiSetup.isInstalling,
+        installError: geminiInstallFailed ? geminiSetup.installError : null,
+        progress: geminiSetup.progress,
+        install: geminiSetup.install,
+        currentVersion: geminiSetup.status?.version,
+      }
+    }
+
     if (step === 'gh-setup' || step === 'gh-installing') {
       return {
         type: 'gh',
@@ -904,6 +1018,7 @@ function OnboardingDialogContent() {
     codexSetup.status?.installed && step === 'codex-setup'
   const isOpencodeReinstall =
     opencodeSetup.status?.installed && step === 'opencode-setup'
+  const isGeminiReinstall = geminiSetup.status?.installed && step === 'gemini-setup'
   const isGhReinstall = ghSetup.status?.installed && step === 'gh-setup'
 
   // When CLI source is 'path', use the path detection result for login command
@@ -920,6 +1035,8 @@ function OnboardingDialogContent() {
     ? opencodePathDetection.data.path
     : (opencodeSetup.status?.path ?? '')
   const opencodeLoginArgs = ['auth', 'login']
+  const geminiLoginCommand = geminiSetup.status?.path ?? ''
+  const geminiLoginArgs = ['-i', '/auth signin'] as string[]
   const ghLoginCommand = (ghPathSelected && ghPathDetection.data?.path)
     ? ghPathDetection.data.path
     : (ghSetup.status?.path ?? '')
@@ -978,9 +1095,19 @@ function OnboardingDialogContent() {
 
     if (
       step === 'claude-setup' ||
-      step === 'claude-installing'
+      step === 'claude-installing' ||
+      step === 'codex-setup' ||
+      step === 'codex-installing' ||
+      step === 'opencode-setup' ||
+      step === 'opencode-installing' ||
+      step === 'gemini-setup' ||
+      step === 'gemini-installing'
     ) {
-      const isReinstall = isClaudeReinstall
+      const isReinstall =
+        (currentBackend === 'claude' && isClaudeReinstall) ||
+        (currentBackend === 'codex' && isCodexReinstall) ||
+        (currentBackend === 'opencode' && isOpencodeReinstall) ||
+        (currentBackend === 'gemini' && isGeminiReinstall)
 
       return {
         title: isReinstall
@@ -1038,7 +1165,9 @@ function OnboardingDialogContent() {
       step === 'codex-auth-checking' ||
       step === 'codex-auth-login' ||
       step === 'opencode-auth-checking' ||
-      step === 'opencode-auth-login'
+      step === 'opencode-auth-login' ||
+      step === 'gemini-auth-checking' ||
+      step === 'gemini-auth-login'
     ) {
       return {
         title: `Authenticate ${backendName}`,
@@ -1056,7 +1185,8 @@ function OnboardingDialogContent() {
     const isBackendStep =
       step.startsWith('claude-') ||
       step.startsWith('codex-') ||
-      step.startsWith('opencode-')
+      step.startsWith('opencode-') ||
+      step.startsWith('gemini-')
     const isGhStep = step.startsWith('gh-')
 
     const backendComplete = !isBackendSelection && !isBackendStep
@@ -1141,6 +1271,7 @@ function OnboardingDialogContent() {
               claudeVersion={claudeSetup.status?.version}
               codexVersion={codexSetup.status?.version}
               opencodeVersion={opencodeSetup.status?.version}
+              geminiVersion={geminiSetup.status?.version}
               ghVersion={ghSetup.status?.version}
               onContinue={handleComplete}
             />
@@ -1153,6 +1284,8 @@ function OnboardingDialogContent() {
               cliName="OpenCode CLI"
               progress={cliData.progress}
             />
+          ) : step === 'gemini-installing' && cliData ? (
+            <InstallingState cliName="Gemini CLI" progress={cliData.progress} />
           ) : step === 'gh-installing' && cliData ? (
             <InstallingState cliName="GitHub CLI" progress={cliData.progress} />
           ) : step === 'claude-auth-checking' ? (
@@ -1161,6 +1294,8 @@ function OnboardingDialogContent() {
             <AuthCheckingState cliName="Codex CLI" />
           ) : step === 'opencode-auth-checking' ? (
             <AuthCheckingState cliName="OpenCode CLI" />
+          ) : step === 'gemini-auth-checking' ? (
+            <AuthCheckingState cliName="Gemini CLI" />
           ) : step === 'gh-auth-checking' ? (
             <AuthCheckingState cliName="GitHub CLI" />
           ) : step === 'claude-setup' && pathDetection.data?.found && !claudePathSelected ? (
@@ -1238,6 +1373,16 @@ function OnboardingDialogContent() {
             ) : (
               <AuthCheckingState cliName="OpenCode CLI" />
             )
+          ) : step === 'gemini-auth-login' ? (
+            <AuthLoginState
+              key={geminiLoginTerminalId}
+              cliName="Gemini CLI"
+              terminalId={geminiLoginTerminalId}
+              command={geminiLoginCommand}
+              commandArgs={geminiLoginArgs}
+              onComplete={handleGeminiLoginComplete}
+              onRetry={handleGeminiLoginRetry}
+            />
           ) : step === 'gh-setup' && ghPathDetection.data?.found && !ghPathSelected ? (
             <CliPathSelector
               cliName="GitHub CLI"
@@ -1275,6 +1420,8 @@ function OnboardingDialogContent() {
                       ? handleCodexInstall
                       : cliData.type === 'opencode'
                         ? handleOpencodeInstall
+                        : cliData.type === 'gemini'
+                          ? handleGeminiInstall
                         : handleGhInstall
                 }
               />
@@ -1289,12 +1436,15 @@ function OnboardingDialogContent() {
                       ? codexVersion
                       : cliData.type === 'opencode'
                         ? opencodeVersion
+                        : cliData.type === 'gemini'
+                          ? geminiVersion
                         : ghVersion
                 }
                 currentVersion={
                   (cliData.type === 'claude' && isClaudeReinstall) ||
                   (cliData.type === 'codex' && isCodexReinstall) ||
                   (cliData.type === 'opencode' && isOpencodeReinstall) ||
+                  (cliData.type === 'gemini' && isGeminiReinstall) ||
                   (cliData.type === 'gh' && isGhReinstall)
                     ? cliData.currentVersion
                     : null
@@ -1309,6 +1459,8 @@ function OnboardingDialogContent() {
                       ? setCodexVersion
                       : cliData.type === 'opencode'
                         ? setOpencodeVersion
+                        : cliData.type === 'gemini'
+                          ? setGeminiVersion
                         : setGhVersion
                 }
                 onInstall={
@@ -1318,6 +1470,8 @@ function OnboardingDialogContent() {
                       ? handleCodexInstall
                       : cliData.type === 'opencode'
                         ? handleOpencodeInstall
+                        : cliData.type === 'gemini'
+                          ? handleGeminiInstall
                         : handleGhInstall
                 }
               />
@@ -1399,6 +1553,7 @@ interface SuccessStateProps {
   claudeVersion: string | null | undefined
   codexVersion: string | null | undefined
   opencodeVersion: string | null | undefined
+  geminiVersion: string | null | undefined
   ghVersion: string | null | undefined
   onContinue: () => void
 }
@@ -1407,6 +1562,7 @@ function SuccessState({
   claudeVersion,
   codexVersion,
   opencodeVersion,
+  geminiVersion,
   ghVersion,
   onContinue,
 }: SuccessStateProps) {
@@ -1418,10 +1574,12 @@ function SuccessState({
             {claudeVersion && <p>Claude CLI: v{claudeVersion}</p>}
             {codexVersion && <p>Codex CLI: v{codexVersion}</p>}
             {opencodeVersion && <p>OpenCode CLI: v{opencodeVersion}</p>}
+            {geminiVersion && <p>Gemini CLI: v{geminiVersion}</p>}
             {ghVersion && <p>GitHub CLI: v{ghVersion}</p>}
             {!claudeVersion &&
               !codexVersion &&
               !opencodeVersion &&
+              !geminiVersion &&
               !ghVersion && <p>Setup complete</p>}
           </div>
       </div>

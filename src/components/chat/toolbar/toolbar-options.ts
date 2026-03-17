@@ -1,4 +1,8 @@
-import { codexModelOptions, type ClaudeModel } from '@/types/preferences'
+import {
+  codexModelOptions,
+  geminiModelOptions,
+  type ClaudeModel,
+} from '@/types/preferences'
 import type { EffortLevel, ThinkingLevel } from '@/types/chat'
 
 export const MODEL_OPTIONS: { value: ClaudeModel; label: string }[] = [
@@ -21,6 +25,11 @@ export const CODEX_MODEL_OPTIONS = codexModelOptions as {
 export const OPENCODE_MODEL_OPTIONS: { value: string; label: string }[] = [
   { value: 'opencode/gpt-5.3-codex', label: 'GPT-5.3 Codex (OpenCode)' },
 ]
+
+export const GEMINI_MODEL_OPTIONS = geminiModelOptions as {
+  value: string
+  label: string
+}[]
 
 export const THINKING_LEVEL_OPTIONS: {
   value: ThinkingLevel

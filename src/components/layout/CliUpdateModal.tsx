@@ -14,6 +14,7 @@ import {
   GhCliReinstallModal,
   CodexCliReinstallModal,
   OpenCodeCliReinstallModal,
+  GeminiCliReinstallModal,
 } from '@/components/preferences/CliReinstallModal'
 
 export function CliUpdateModal() {
@@ -45,6 +46,10 @@ export function CliUpdateModal() {
       />
       <OpenCodeCliReinstallModal
         open={cliUpdateModalOpen && cliUpdateModalType === 'opencode'}
+        onOpenChange={handleOpenChange}
+      />
+      <GeminiCliReinstallModal
+        open={cliUpdateModalOpen && cliUpdateModalType === 'gemini'}
         onOpenChange={handleOpenChange}
       />
     </>

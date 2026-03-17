@@ -15,9 +15,21 @@ export type PreferencePane =
 
 export type OnboardingStartStep = 'claude' | 'gh' | null
 
-export type CliUpdateModalType = 'claude' | 'gh' | 'codex' | 'opencode' | null
+export type CliUpdateModalType =
+  | 'claude'
+  | 'gh'
+  | 'codex'
+  | 'opencode'
+  | 'gemini'
+  | null
 
-export type CliLoginModalType = 'claude' | 'gh' | 'codex' | 'opencode' | null
+export type CliLoginModalType =
+  | 'claude'
+  | 'gh'
+  | 'codex'
+  | 'opencode'
+  | 'gemini'
+  | null
 
 interface UIState {
   leftSidebarVisible: boolean
@@ -118,10 +130,12 @@ interface UIState {
     projectPath?: string | null,
     branch?: string | null
   ) => void
-  openCliUpdateModal: (type: 'claude' | 'gh' | 'codex' | 'opencode') => void
+  openCliUpdateModal: (
+    type: 'claude' | 'gh' | 'codex' | 'opencode' | 'gemini'
+  ) => void
   closeCliUpdateModal: () => void
   openCliLoginModal: (
-    type: 'claude' | 'gh' | 'codex' | 'opencode',
+    type: 'claude' | 'gh' | 'codex' | 'opencode' | 'gemini',
     command: string,
     commandArgs?: string[]
   ) => void

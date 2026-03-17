@@ -2,12 +2,13 @@ import { useMemo } from 'react'
 import type { ClaudeModel, CustomCliProfile } from '@/types/preferences'
 import {
   CODEX_MODEL_OPTIONS,
+  GEMINI_MODEL_OPTIONS,
   MODEL_OPTIONS,
   OPENCODE_MODEL_OPTIONS,
 } from '@/components/chat/toolbar/toolbar-options'
 
 interface UseToolbarDerivedStateArgs {
-  selectedBackend: 'claude' | 'codex' | 'opencode'
+  selectedBackend: 'claude' | 'codex' | 'opencode' | 'gemini'
   selectedProvider: string | null
   selectedModel: string
   opencodeModelOptions?: { value: string; label: string }[]
@@ -27,6 +28,7 @@ export function useToolbarDerivedState({
 }: UseToolbarDerivedStateArgs) {
   const isCodex = selectedBackend === 'codex'
   const isOpencode = selectedBackend === 'opencode'
+  const isGemini = selectedBackend === 'gemini'
 
   const activeMcpCount = useMemo(() => {
     const availableNames = new Set(
@@ -39,6 +41,7 @@ export function useToolbarDerivedState({
     if (isCodex)
       return CODEX_MODEL_OPTIONS as { value: string; label: string }[]
     if (isOpencode) return opencodeModelOptions ?? OPENCODE_MODEL_OPTIONS
+    if (isGemini) return GEMINI_MODEL_OPTIONS
     if (!selectedProvider || selectedProvider === '__anthropic__') {
       return MODEL_OPTIONS
     }
@@ -73,6 +76,7 @@ export function useToolbarDerivedState({
     customCliProfiles,
     isCodex,
     isOpencode,
+    isGemini,
     opencodeModelOptions,
   ])
 

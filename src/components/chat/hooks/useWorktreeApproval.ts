@@ -56,12 +56,13 @@ function mapCodexReasoningToEffort(value: string | null | undefined): EffortLeve
 }
 
 function getDefaultModelForBackend(
-  backend: 'claude' | 'codex' | 'opencode' | undefined,
+  backend: 'claude' | 'codex' | 'opencode' | 'gemini' | undefined,
   preferences:
     | {
         selected_model?: string | null
         selected_codex_model?: string | null
         selected_opencode_model?: string | null
+        selected_gemini_model?: string | null
       }
     | undefined
 ): string {
@@ -70,6 +71,9 @@ function getDefaultModelForBackend(
   }
   if (backend === 'opencode') {
     return preferences?.selected_opencode_model ?? 'opencode/gpt-5.3-codex'
+  }
+  if (backend === 'gemini') {
+    return preferences?.selected_gemini_model ?? 'auto-gemini-3'
   }
   return preferences?.selected_model ?? 'opus'
 }
@@ -298,12 +302,12 @@ export function useWorktreeApproval({
       // Step 8: Send plan as first message with mode-specific overrides
       const isYolo = mode === 'yolo'
       const modeLabel = isYolo ? 'Yolo' : 'Build'
-      const originalBackend = card.session.backend as 'claude' | 'codex' | 'opencode' | undefined
+      const originalBackend = card.session.backend as 'claude' | 'codex' | 'opencode' | 'gemini' | undefined
       const modeBackendPref = isYolo ? preferences?.yolo_backend : preferences?.build_backend
       const modeModelPref = isYolo ? preferences?.yolo_model : preferences?.build_model
       const modeThinkingPref = isYolo ? preferences?.yolo_thinking_level : preferences?.build_thinking_level
-      const modeBackendOverride = modeBackendPref as 'claude' | 'codex' | 'opencode' | null
-      const backend = (modeBackendOverride ?? originalBackend ?? undefined) as 'claude' | 'codex' | 'opencode' | undefined
+      const modeBackendOverride = modeBackendPref as 'claude' | 'codex' | 'opencode' | 'gemini' | null
+      const backend = (modeBackendOverride ?? originalBackend ?? undefined) as 'claude' | 'codex' | 'opencode' | 'gemini' | undefined
       const model = modeModelPref ??
         (modeBackendOverride
           ? getDefaultModelForBackend(backend, preferences)
@@ -360,7 +364,7 @@ export function useWorktreeApproval({
       if (backend) {
         chatStore.setSelectedBackend(
           newSession.id,
-          backend as 'claude' | 'codex' | 'opencode'
+          backend as 'claude' | 'codex' | 'opencode' | 'gemini'
         )
       }
 

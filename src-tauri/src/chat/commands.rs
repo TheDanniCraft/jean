@@ -42,6 +42,7 @@ pub(crate) fn resolve_default_backend(app: &AppHandle, worktree_id: Option<&str>
     let mut resolved = match prefs_backend.as_str() {
         "codex" => Backend::Codex,
         "opencode" => Backend::Opencode,
+        "gemini" => Backend::Gemini,
         _ => Backend::Claude,
     };
 
@@ -59,6 +60,7 @@ pub(crate) fn resolve_default_backend(app: &AppHandle, worktree_id: Option<&str>
                     resolved = match pb.as_str() {
                         "codex" => Backend::Codex,
                         "opencode" => Backend::Opencode,
+                        "gemini" => Backend::Gemini,
                         "claude" => Backend::Claude,
                         _ => resolved,
                     };
@@ -81,6 +83,7 @@ pub(crate) fn resolve_magic_prompt_backend(
         match b {
             "opencode" => return Backend::Opencode,
             "codex" => return Backend::Codex,
+            "gemini" => return Backend::Gemini,
             "claude" => return Backend::Claude,
             _ => {}
         }
@@ -323,6 +326,7 @@ pub async fn create_session(
     let backend_enum = match backend.as_deref() {
         Some("codex") => Backend::Codex,
         Some("opencode") => Backend::Opencode,
+        Some("gemini") => Backend::Gemini,
         Some("claude") => Backend::Claude,
         _ => {
             // No explicit backend — check project default, then global preference
@@ -332,6 +336,8 @@ pub async fn create_session(
                     resolved = Backend::Codex;
                 } else if prefs.default_backend == "opencode" {
                     resolved = Backend::Opencode;
+                } else if prefs.default_backend == "gemini" {
+                    resolved = Backend::Gemini;
                 }
             }
             // Check project-level override
@@ -349,6 +355,7 @@ pub async fn create_session(
                         resolved = match pb.as_str() {
                             "codex" => Backend::Codex,
                             "opencode" => Backend::Opencode,
+                            "gemini" => Backend::Gemini,
                             "claude" => Backend::Claude,
                             _ => resolved,
                         };
@@ -1495,6 +1502,7 @@ pub async fn send_chat_message(
     let effective_backend = match backend.as_deref() {
         Some("codex") => Backend::Codex,
         Some("opencode") => Backend::Opencode,
+        Some("gemini") => Backend::Gemini,
         Some("claude") => Backend::Claude,
         _ => session_backend.clone(),
     };
@@ -1530,6 +1538,9 @@ pub async fn send_chat_message(
     let claude_session_id = sessions
         .find_session(&session_id)
         .and_then(|s| s.claude_session_id.clone());
+    let gemini_session_id = sessions
+        .find_session(&session_id)
+        .and_then(|s| s.gemini_session_id.clone());
     let codex_thread_id = sessions
         .find_session(&session_id)
         .and_then(|s| s.codex_thread_id.clone());
@@ -1591,7 +1602,7 @@ pub async fn send_chat_message(
                     Backend::Codex => {
                         codex_search_enabled = true;
                     }
-                    Backend::Opencode => {}
+                    Backend::Opencode | Backend::Gemini => {}
                 }
             }
         }
@@ -1635,6 +1646,7 @@ pub async fn send_chat_message(
     let thread_output_file = output_file.clone();
     let thread_working_dir = context.worktree_path.clone();
     let thread_claude_session_id = claude_session_id.clone();
+    let thread_gemini_session_id = gemini_session_id.clone();
     let thread_codex_thread_id = codex_thread_id.clone();
     let thread_opencode_session_id = opencode_session_id.clone();
     let thread_model = model.clone();
@@ -2371,6 +2383,35 @@ pub async fn send_chat_message(
                     }
                 }
             }
+            Backend::Gemini => match super::gemini::execute_gemini(
+                &thread_app,
+                &thread_session_id,
+                &thread_worktree_id,
+                std::path::Path::new(&thread_working_dir),
+                &thread_message,
+                &thread_output_file,
+                thread_gemini_session_id.as_deref(),
+                thread_execution_mode.as_deref(),
+                thread_model.as_deref(),
+            ) {
+                Ok(response) => Ok((
+                    0,
+                    UnifiedResponse {
+                        content: response.content,
+                        resume_id: response.session_id.unwrap_or_default(),
+                        tool_calls: response.tool_calls,
+                        content_blocks: response.content_blocks,
+                        cancelled: false,
+                        error_emitted: false,
+                        usage: response.usage,
+                        backend: Backend::Gemini,
+                    },
+                )),
+                Err(e) => {
+                    log::error!("execute_gemini FAILED: {e}");
+                    Err(e)
+                }
+            },
         };
         let _ = tx.send(result);
     });
@@ -2494,6 +2535,9 @@ pub async fn send_chat_message(
                         Backend::Claude => {
                             session.claude_session_id = Some(resume_id_for_log.clone());
                         }
+                        Backend::Gemini => {
+                            session.gemini_session_id = Some(resume_id_for_log.clone());
+                        }
                         Backend::Codex => {
                             session.codex_thread_id = Some(resume_id_for_log.clone());
                         }
@@ -2607,6 +2651,9 @@ pub async fn send_chat_message(
                     Backend::Claude => {
                         session.claude_session_id = Some(resume_id_for_log.clone());
                     }
+                    Backend::Gemini => {
+                        session.gemini_session_id = Some(resume_id_for_log.clone());
+                    }
                     Backend::Codex => {
                         session.codex_thread_id = Some(resume_id_for_log.clone());
                     }
@@ -2687,6 +2734,7 @@ pub async fn clear_session_history(
 
             session.messages.clear();
             session.claude_session_id = None;
+            session.gemini_session_id = None;
             session.codex_thread_id = None;
             session.opencode_session_id = None;
             session.selected_model = selected_model;
@@ -2785,6 +2833,7 @@ pub async fn set_session_backend(
             session.backend = match backend.as_str() {
                 "codex" => super::types::Backend::Codex,
                 "opencode" => super::types::Backend::Opencode,
+                "gemini" => super::types::Backend::Gemini,
                 _ => super::types::Backend::Claude,
             };
             log::trace!("Backend selection saved");

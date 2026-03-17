@@ -62,7 +62,7 @@ interface MobileToolbarMenuProps {
   hasOpenPr: boolean
   sessionHasMessages?: boolean
   providerLocked?: boolean
-  selectedBackend: 'claude' | 'codex' | 'opencode'
+  selectedBackend: 'claude' | 'codex' | 'opencode' | 'gemini'
   selectedProvider: string | null
   selectedModel: string
   selectedEffortLevel: EffortLevel
@@ -92,8 +92,8 @@ interface MobileToolbarMenuProps {
   onReview: () => void
   onMerge: () => void
   onResolveConflicts: () => void
-  installedBackends: ('claude' | 'codex' | 'opencode')[]
-  onBackendChange: (backend: 'claude' | 'codex' | 'opencode') => void
+  installedBackends: ('claude' | 'codex' | 'opencode' | 'gemini')[]
+  onBackendChange: (backend: 'claude' | 'codex' | 'opencode' | 'gemini') => void
   onSetExecutionMode: (mode: ExecutionMode) => void
 
   handlePullClick: () => void
@@ -367,7 +367,7 @@ export function MobileToolbarMenu({
               <DropdownMenuRadioGroup
                 value={selectedBackend}
                 onValueChange={v =>
-                  onBackendChange(v as 'claude' | 'codex' | 'opencode')
+                  onBackendChange(v as 'claude' | 'codex' | 'opencode' | 'gemini')
                 }
               >
                 {installedBackends.includes('claude') && (
@@ -386,6 +386,14 @@ export function MobileToolbarMenu({
                 {installedBackends.includes('opencode') && (
                   <DropdownMenuRadioItem value="opencode">
                     OpenCode{' '}
+                    <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
+                      BETA
+                    </span>
+                  </DropdownMenuRadioItem>
+                )}
+                {installedBackends.includes('gemini') && (
+                  <DropdownMenuRadioItem value="gemini">
+                    Gemini{' '}
                     <span className="ml-1 rounded bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase text-primary">
                       BETA
                     </span>

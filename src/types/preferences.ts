@@ -941,9 +941,10 @@ export interface AppPreferences {
 
   confirm_session_close: boolean // Show confirmation dialog before closing sessions/worktrees
   default_execution_mode: ExecutionMode // Default execution mode for new sessions: 'plan', 'build', or 'yolo'
-  default_backend: CliBackend // Default CLI backend for new sessions: 'claude', 'codex', or 'opencode'
+  default_backend: CliBackend // Default CLI backend for new sessions: 'claude', 'codex', 'opencode', or 'gemini'
   selected_codex_model: CodexModel // Default Codex model
   selected_opencode_model: string // Default OpenCode model (provider/model)
+  selected_gemini_model: GeminiModel // Default Gemini model
   default_codex_reasoning_effort: CodexReasoningEffort // Default reasoning effort for Codex: 'low' | 'medium' | 'high' | 'xhigh'
   codex_multi_agent_enabled: boolean // Enable Codex multi-agent collaboration (experimental)
   codex_max_agent_threads: number // Max concurrent agent threads (1-8) when multi-agent is enabled
@@ -1117,6 +1118,23 @@ export const codexModelOptions: { value: CodexModel; label: string }[] = [
   { value: 'gpt-5.1-codex-mini', label: 'GPT 5.1 Codex Mini' },
 ]
 
+export type GeminiModel =
+  | 'auto-gemini-3'
+  | 'auto-gemini-2.5'
+  | 'gemini-3-pro-preview'
+  | 'gemini-3-flash-preview'
+  | 'gemini-2.5-pro'
+  | 'gemini-2.5-flash'
+
+export const geminiModelOptions: { value: GeminiModel; label: string }[] = [
+  { value: 'auto-gemini-3', label: 'Auto (Gemini 3)' },
+  { value: 'auto-gemini-2.5', label: 'Auto (Gemini 2.5)' },
+  { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
+  { value: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+]
+
 const deprecatedCodexFastModelMap = {
   'gpt-5.3-fast': 'gpt-5.3',
   'gpt-5.3-codex-fast': 'gpt-5.3-codex',
@@ -1173,12 +1191,13 @@ export const codexReasoningOptions: {
 // CLI Backend
 // =============================================================================
 
-export type CliBackend = 'claude' | 'codex' | 'opencode'
+export type CliBackend = 'claude' | 'codex' | 'opencode' | 'gemini'
 
 export const backendOptions: { value: CliBackend; label: string }[] = [
   { value: 'claude', label: 'Claude' },
   { value: 'codex', label: 'Codex' },
   { value: 'opencode', label: 'OpenCode' },
+  { value: 'gemini', label: 'Gemini CLI (gemini)' },
 ]
 
 
@@ -1508,6 +1527,7 @@ export const defaultPreferences: AppPreferences = {
   default_backend: 'claude', // Default: Claude
   selected_codex_model: 'gpt-5.4', // Default: latest Codex model
   selected_opencode_model: 'opencode/gpt-5.3-codex', // Default OpenCode model
+  selected_gemini_model: 'auto-gemini-3', // Default Gemini model
   default_codex_reasoning_effort: 'high', // Default: high reasoning
   codex_multi_agent_enabled: false, // Default: disabled
   codex_max_agent_threads: 3, // Default: 3 threads

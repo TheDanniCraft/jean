@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useTerminal } from '@/hooks/useTerminal'
-import { disposeTerminal, setOnStopped } from '@/lib/terminal-instances'
+import { disposeTerminal, setOnStopped, registerOutputListener } from '@/lib/terminal-instances'
 
 export interface SetupStateProps {
   cliName: string
@@ -322,6 +322,32 @@ export function AuthLoginState({
   useEffect(() => {
     setExitStatus(null)
   }, [terminalId])
+
+  // Watch for specific output patterns (e.g. Gemini "successfully signed in")
+  useEffect(() => {
+    let completed = false
+    let buffer = ''
+    const unlisten = registerOutputListener(terminalId, data => {
+      if (completed) return
+
+      // Accumulate output to handle chunking
+      buffer += data
+      if (buffer.length > 10000) buffer = buffer.slice(-5000) // Keep last 5KB
+
+      // Gemini CLI success pattern (case-insensitive, ignore ANSI codes)
+      // "You've successfully signed in with Google. Gemini CLI needs to be restarted."
+      const cleanBuffer = buffer.replace(/\x1B\[[0-9;]*[mK]/g, '').toLowerCase()
+      if (cleanBuffer.includes("successfully signed in") && cleanBuffer.includes("needs to be restarted")) {
+        completed = true
+        // Brief delay so user can see the success output
+        setTimeout(() => {
+          onComplete()
+          invoke('stop_terminal', { terminalId }).catch(() => {})
+        }, 1500)
+      }
+    })
+    return () => unlisten()
+  }, [terminalId, onComplete])
 
   // Cleanup observer and terminal on unmount
   useEffect(() => {

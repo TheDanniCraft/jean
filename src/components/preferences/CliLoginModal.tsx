@@ -14,6 +14,7 @@ import { claudeCliQueryKeys } from '@/services/claude-cli'
 import { ghCliQueryKeys } from '@/services/gh-cli'
 import { codexCliQueryKeys } from '@/services/codex-cli'
 import { opencodeCliQueryKeys } from '@/services/opencode-cli'
+import { geminiCliQueryKeys } from '@/services/gemini-cli'
 import { githubQueryKeys } from '@/services/github'
 import {
   Dialog,
@@ -56,7 +57,7 @@ export function CliLoginModal() {
 }
 
 interface CliLoginModalContentProps {
-  cliType: 'claude' | 'gh' | 'codex' | 'opencode' | null
+  cliType: 'claude' | 'gh' | 'codex' | 'opencode' | 'gemini' | null
   command: string
   commandArgs: string[] | null
   onClose: () => void
@@ -85,6 +86,8 @@ function CliLoginModalContent({
         ? 'Codex CLI'
         : cliType === 'opencode'
           ? 'OpenCode CLI'
+          : cliType === 'gemini'
+            ? 'Gemini CLI'
           : 'GitHub CLI'
 
   // Generate unique terminal ID for this login session
@@ -98,20 +101,70 @@ function CliLoginModalContent({
   const outputBufferRef = useRef<string[]>([])
   const MAX_OUTPUT_LINES = 50
 
+  // Cleanup terminal when modal closes
+  const handleOpenChange = useCallback(
+    async (open: boolean) => {
+      if (!open) {
+        // Stop PTY process
+        try {
+          await invoke('stop_terminal', { terminalId })
+        } catch {
+          // Terminal may already be stopped
+        }
+        // Dispose xterm instance
+        disposeTerminal(terminalId)
+
+        // Invalidate caches so views auto-refetch after login/update
+        if (cliType === 'claude') {
+          queryClient.invalidateQueries({ queryKey: claudeCliQueryKeys.all })
+        } else if (cliType === 'gh') {
+          queryClient.invalidateQueries({ queryKey: ghCliQueryKeys.all })
+          queryClient.invalidateQueries({ queryKey: githubQueryKeys.all })
+        } else if (cliType === 'codex') {
+          queryClient.invalidateQueries({ queryKey: codexCliQueryKeys.all })
+        } else if (cliType === 'opencode') {
+          queryClient.invalidateQueries({ queryKey: opencodeCliQueryKeys.all })
+        } else if (cliType === 'gemini') {
+          queryClient.invalidateQueries({ queryKey: geminiCliQueryKeys.all })
+        }
+
+        onClose()
+      }
+    },
+    [terminalId, onClose, cliType, queryClient]
+  )
+
   useEffect(() => {
+    let completed = false
+    let buffer = ''
     const unlisten = listen<{ terminal_id: string; data: string }>(
       'terminal:output',
       event => {
         if (event.payload.terminal_id !== terminalId) return
+        
+        // --- 1. Accumulate for error logs ---
         const lines = event.payload.data.split('\n')
         outputBufferRef.current.push(...lines)
         if (outputBufferRef.current.length > MAX_OUTPUT_LINES) {
           outputBufferRef.current = outputBufferRef.current.slice(-MAX_OUTPUT_LINES)
         }
+
+        // --- 2. Monitor for Gemini success (if it's gemini) ---
+        if (cliType === 'gemini' && !completed) {
+          buffer += event.payload.data
+          if (buffer.length > 10000) buffer = buffer.slice(-5000)
+
+          const cleanBuffer = buffer.replace(/\x1B\[[0-9;]*[mK]/g, '').toLowerCase()
+          if (cleanBuffer.includes("successfully signed in") && cleanBuffer.includes("needs to be restarted")) {
+            completed = true
+            // Brief delay so user can see the success output
+            setTimeout(() => handleOpenChange(false), 1500)
+          }
+        }
       }
     )
     return () => { unlisten.then(fn => fn()) }
-  }, [terminalId])
+  }, [terminalId, cliType, handleOpenChange])
 
   // Use a synthetic worktreeId for CLI login (not associated with any real worktree)
   const { initTerminal, fit } = useTerminal({
@@ -174,37 +227,6 @@ function CliLoginModalContent({
     }
   }, [terminalId])
 
-  // Cleanup terminal when modal closes
-  const handleOpenChange = useCallback(
-    async (open: boolean) => {
-      if (!open) {
-        // Stop PTY process
-        try {
-          await invoke('stop_terminal', { terminalId })
-        } catch {
-          // Terminal may already be stopped
-        }
-        // Dispose xterm instance
-        disposeTerminal(terminalId)
-
-        // Invalidate caches so views auto-refetch after login/update
-        if (cliType === 'claude') {
-          queryClient.invalidateQueries({ queryKey: claudeCliQueryKeys.all })
-        } else if (cliType === 'gh') {
-          queryClient.invalidateQueries({ queryKey: ghCliQueryKeys.all })
-          queryClient.invalidateQueries({ queryKey: githubQueryKeys.all })
-        } else if (cliType === 'codex') {
-          queryClient.invalidateQueries({ queryKey: codexCliQueryKeys.all })
-        } else if (cliType === 'opencode') {
-          queryClient.invalidateQueries({ queryKey: opencodeCliQueryKeys.all })
-        }
-
-        onClose()
-      }
-    },
-    [terminalId, onClose, cliType, queryClient]
-  )
-
   // Auto-close modal on success, show error on failure
   useEffect(() => {
     setOnStopped(terminalId, (exitCode, signal) => {
@@ -225,7 +247,7 @@ function CliLoginModalContent({
       }
     })
     return () => setOnStopped(terminalId, undefined)
-  }, [terminalId, handleOpenChange])
+  }, [terminalId, handleOpenChange, cliName, command, commandArgs])
 
   return (
     <Dialog open={true} onOpenChange={handleOpenChange}>

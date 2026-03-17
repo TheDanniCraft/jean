@@ -54,6 +54,12 @@ type ListItem =
   | { type: 'command'; data: ClaudeCommand }
   | { type: 'skill'; data: ClaudeSkill }
 
+const BUILTIN_PLAN_COMMAND: ClaudeCommand = {
+  name: 'plan',
+  path: '__builtin_plan__',
+  description: 'Enter plan mode and draft a solution without executing code',
+}
+
 export function SlashPopover({
   open,
   onOpenChange,
@@ -77,7 +83,10 @@ export function SlashPopover({
 
     // Add commands first (only if at prompt start)
     if (isAtPromptStart) {
-      fuzzySearchItems(commands, searchQuery, 10).forEach(cmd => {
+      const commandSource = commands.some(cmd => cmd.name === 'plan')
+        ? commands
+        : [BUILTIN_PLAN_COMMAND, ...commands]
+      fuzzySearchItems(commandSource, searchQuery, 10).forEach(cmd => {
         items.push({ type: 'command', data: cmd })
       })
     }

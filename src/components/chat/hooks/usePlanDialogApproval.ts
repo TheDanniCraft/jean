@@ -37,7 +37,7 @@ interface UsePlanDialogApprovalParams {
   isCodexBackendRef: RefObject<boolean>
   mcpServersDataRef: RefObject<McpServerInfo[] | undefined>
   enabledMcpServersRef: RefObject<string[]>
-  selectedBackendRef: RefObject<'claude' | 'codex' | 'opencode'>
+  selectedBackendRef: RefObject<'claude' | 'codex' | 'opencode' | 'gemini'>
   scrollToBottom: (instant?: boolean) => void
 }
 
@@ -188,12 +188,16 @@ export function usePlanDialogApproval({
         })
 
       // Build approval message
-      const defaultText =
-        mode === 'yolo'
+      const isGemini = selectedBackendRef.current === 'gemini'
+      const defaultText = isGemini
+        ? 'The plan is approved. Call exit-plan-mode and begin execution.'
+        : mode === 'yolo'
           ? 'Plan approved (yolo mode). Begin implementing all changes immediately without asking for confirmation. Do not re-explain the plan — start writing code.'
           : 'Plan approved. Begin implementing the changes now. Do not re-explain the plan — start writing code.'
       const message = updatedPlan
-        ? `I've updated the plan. Please review and execute:\n\n<updated-plan>\n${updatedPlan}\n</updated-plan>`
+        ? isGemini
+          ? `The plan is approved. Call exit-plan-mode and begin execution.\n\n<approved-plan>\n${updatedPlan}\n</approved-plan>`
+          : `I've updated the plan. Please review and execute:\n\n<updated-plan>\n${updatedPlan}\n</updated-plan>`
         : defaultText
 
       setExecutionMode(activeSessionId, mode)

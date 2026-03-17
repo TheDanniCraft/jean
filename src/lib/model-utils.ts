@@ -15,7 +15,8 @@ const ADAPTIVE_THINKING_MIN_CLI_VERSION = '2.1.32'
 /**
  * Resolve which CLI backend to use based on the model string.
  */
-export function resolveBackend(model: string): 'claude' | 'codex' | 'opencode' {
+export function resolveBackend(model: string): 'claude' | 'codex' | 'opencode' | 'gemini' {
+  if (model.includes('gemini')) return 'gemini'
   if (model.startsWith('opencode/')) return 'opencode'
   if (model.startsWith('codex') || model.includes('codex')) return 'codex'
   return 'claude'

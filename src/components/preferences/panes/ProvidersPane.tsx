@@ -15,7 +15,10 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { usePreferences, usePatchPreferences } from '@/services/preferences'
 import {
+  type CliBackend,
   type CustomCliProfile,
+  type GeminiModel,
+  geminiModelOptions,
   PREDEFINED_CLI_PROFILES,
 } from '@/types/preferences'
 
@@ -56,6 +59,68 @@ export const ProvidersPane: React.FC = () => {
 
   return (
     <div className="space-y-8">
+      <SettingsSection
+        title="Default AI Provider"
+        description="Choose which CLI backend new sessions should use by default."
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium">Provider</p>
+            <p className="text-xs text-muted-foreground">
+              Backend used for new sessions
+            </p>
+          </div>
+          <Select
+            value={preferences?.default_backend ?? 'claude'}
+            onValueChange={value =>
+              patchPreferences.mutate({
+                default_backend: value as CliBackend,
+              })
+            }
+          >
+            <SelectTrigger className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="claude">Claude CLI (claude)</SelectItem>
+              <SelectItem value="codex">Codex CLI (codex)</SelectItem>
+              <SelectItem value="opencode">OpenCode CLI (opencode)</SelectItem>
+              <SelectItem value="gemini">Gemini CLI (gemini)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {preferences?.default_backend === 'gemini' && (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Model</p>
+              <p className="text-xs text-muted-foreground">
+                Model passed to `gemini --model`
+              </p>
+            </div>
+            <Select
+              value={preferences?.selected_gemini_model ?? 'auto-gemini-3'}
+              onValueChange={value =>
+                patchPreferences.mutate({
+                  selected_gemini_model: value as GeminiModel,
+                })
+              }
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {geminiModelOptions.map(option => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </SettingsSection>
+
       <SettingsSection
         title="Claude CLI"
         description="Custom settings profiles for the Claude CLI. Each profile can override the API endpoint, authentication, and model routing."

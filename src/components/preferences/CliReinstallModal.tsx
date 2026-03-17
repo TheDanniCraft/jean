@@ -25,6 +25,7 @@ import { useClaudeCliSetup } from '@/services/claude-cli'
 import { useGhCliSetup } from '@/services/gh-cli'
 import { useCodexCliSetup } from '@/services/codex-cli'
 import { useOpenCodeCliSetup } from '@/services/opencode-cli'
+import { useGeminiCliSetup } from '@/services/gemini-cli'
 import { logger } from '@/lib/logger'
 import {
   SetupState,
@@ -146,12 +147,31 @@ function OpenCodeCliReinstallModalContent({ open, onOpenChange }: ModalProps) {
   )
 }
 
+export function GeminiCliReinstallModal({ open, onOpenChange }: ModalProps) {
+  if (!open) return null
+  return (
+    <GeminiCliReinstallModalContent open={open} onOpenChange={onOpenChange} />
+  )
+}
+
+function GeminiCliReinstallModalContent({ open, onOpenChange }: ModalProps) {
+  const setup = useGeminiCliSetup()
+  return (
+    <CliReinstallModalUI
+      setup={setup}
+      cliType="gemini"
+      open={open}
+      onOpenChange={onOpenChange}
+    />
+  )
+}
+
 /**
  * Shared UI component - receives setup as prop, no hooks here
  */
 interface CliReinstallModalUIProps {
   setup: CliSetupInterface
-  cliType: 'claude' | 'gh' | 'codex' | 'opencode'
+  cliType: 'claude' | 'gh' | 'codex' | 'opencode' | 'gemini'
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -169,6 +189,8 @@ function CliReinstallModalUI({
         ? 'Codex CLI'
         : cliType === 'opencode'
           ? 'OpenCode CLI'
+          : cliType === 'gemini'
+            ? 'Gemini CLI'
           : 'GitHub CLI'
 
   // Store setup in ref for stable callback reference
@@ -281,7 +303,7 @@ function CliReinstallModalUI({
               ? `${cliName} has been successfully installed.`
               : isReinstall
                 ? 'Select a version to install. This will replace the current installation.'
-                : `${cliName} is required for ${cliType === 'claude' ? 'AI chat functionality' : cliType === 'codex' ? 'Codex AI sessions' : cliType === 'opencode' ? 'OpenCode AI sessions' : 'GitHub integration'}.`}
+                : `${cliName} is required for ${cliType === 'claude' ? 'AI chat functionality' : cliType === 'codex' ? 'Codex AI sessions' : cliType === 'opencode' ? 'OpenCode AI sessions' : cliType === 'gemini' ? 'Gemini AI sessions' : 'GitHub integration'}.`}
           </DialogDescription>
         </DialogHeader>
 

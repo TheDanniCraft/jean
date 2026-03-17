@@ -23,6 +23,10 @@ import {
   useAvailableOpencodeVersions,
   useOpencodePathDetection,
 } from '@/services/opencode-cli'
+import {
+  useGeminiCliStatus,
+  useAvailableGeminiVersions,
+} from '@/services/gemini-cli'
 import { useUIStore } from '@/store/ui-store'
 import { isNewerVersion } from '@/lib/version-utils'
 import { logger } from '@/lib/logger'
@@ -30,7 +34,7 @@ import { isNativeApp } from '@/lib/environment'
 import { usePreferences } from '@/services/preferences'
 
 interface CliUpdateInfo {
-  type: 'claude' | 'gh' | 'codex' | 'opencode'
+  type: 'claude' | 'gh' | 'codex' | 'opencode' | 'gemini'
   currentVersion: string
   latestVersion: string
   cliSource?: 'jean' | 'path'
@@ -44,6 +48,7 @@ const CLI_BINARY_NAMES: Record<CliUpdateInfo['type'], string> = {
   gh: 'gh',
   codex: 'codex',
   opencode: 'opencode',
+  gemini: 'gemini-cli',
 }
 
 const CLI_DISPLAY_NAMES: Record<CliUpdateInfo['type'], string> = {
@@ -51,6 +56,7 @@ const CLI_DISPLAY_NAMES: Record<CliUpdateInfo['type'], string> = {
   gh: 'GitHub CLI',
   codex: 'Codex CLI',
   opencode: 'OpenCode CLI',
+  gemini: 'Gemini CLI',
 }
 
 /**
@@ -83,6 +89,8 @@ export function useCliVersionCheck() {
     useCodexCliStatus({ enabled: shouldCheck && versionCheckReady })
   const { data: opencodeStatus, isLoading: opencodeLoading } =
     useOpencodeCliStatus({ enabled: shouldCheck && versionCheckReady })
+  const { data: geminiStatus, isLoading: geminiLoading } =
+    useGeminiCliStatus({ enabled: shouldCheck && versionCheckReady })
   const { data: claudeVersions, isLoading: claudeVersionsLoading } =
     useAvailableCliVersions({ enabled: shouldCheck && versionCheckReady })
   const { data: ghVersions, isLoading: ghVersionsLoading } =
@@ -91,6 +99,8 @@ export function useCliVersionCheck() {
     useAvailableCodexVersions({ enabled: shouldCheck && versionCheckReady })
   const { data: opencodeVersions, isLoading: opencodeVersionsLoading } =
     useAvailableOpencodeVersions({ enabled: shouldCheck && versionCheckReady })
+  const { data: geminiVersions, isLoading: geminiVersionsLoading } =
+    useAvailableGeminiVersions({ enabled: shouldCheck && versionCheckReady })
 
   // Track which update pairs we've already shown notifications for
   // Format: "type:currentVersion→latestVersion"
@@ -104,10 +114,12 @@ export function useCliVersionCheck() {
       ghLoading ||
       codexLoading ||
       opencodeLoading ||
+      geminiLoading ||
       claudeVersionsLoading ||
       ghVersionsLoading ||
       codexVersionsLoading ||
-      opencodeVersionsLoading
+      opencodeVersionsLoading ||
+      geminiVersionsLoading
     if (isLoading) return
 
     const updates: CliUpdateInfo[] = []
@@ -133,6 +145,29 @@ export function useCliVersionCheck() {
             cliSource: preferences?.claude_cli_source,
             cliPath: claudeStatus.path,
             packageManager: claudePathInfo?.package_manager,
+          })
+        }
+      }
+    }
+
+    // Check Gemini CLI
+    if (
+      geminiStatus?.installed &&
+      geminiStatus.version &&
+      geminiVersions?.length
+    ) {
+      const latestStable = geminiVersions.find(v => !v.prerelease)
+      if (
+        latestStable &&
+        isNewerVersion(latestStable.version, geminiStatus.version)
+      ) {
+        const key = `gemini:${geminiStatus.version}→${latestStable.version}`
+        if (!notifiedRef.current.has(key)) {
+          notifiedRef.current.add(key)
+          updates.push({
+            type: 'gemini',
+            currentVersion: geminiStatus.version,
+            latestVersion: latestStable.version,
           })
         }
       }
@@ -231,18 +266,22 @@ export function useCliVersionCheck() {
     ghStatus,
     codexStatus,
     opencodeStatus,
+    geminiStatus,
     claudeVersions,
     ghVersions,
     codexVersions,
     opencodeVersions,
+    geminiVersions,
     claudeLoading,
     ghLoading,
     codexLoading,
     opencodeLoading,
+    geminiLoading,
     claudeVersionsLoading,
     ghVersionsLoading,
     codexVersionsLoading,
     opencodeVersionsLoading,
+    geminiVersionsLoading,
     preferences?.claude_cli_source,
     preferences?.codex_cli_source,
     preferences?.opencode_cli_source,

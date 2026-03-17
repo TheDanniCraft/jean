@@ -899,6 +899,25 @@ export const ChatInput = memo(function ChatInput({
   // Handle command selection from / mention popover (executes immediately)
   const handleCommandSelect = useCallback(
     (command: ClaudeCommand) => {
+      if (command.path === '__builtin_plan__' || command.name === 'plan') {
+        if (inputRef.current) {
+          inputRef.current.value = '/plan '
+          valueRef.current = '/plan '
+        }
+        if (activeSessionId) {
+          useChatStore.getState().setInputDraft(activeSessionId, '/plan ')
+        }
+        setSlashPopoverOpen(false)
+        setSlashTriggerIndex(null)
+        setSlashQuery('')
+        setShowHint(false)
+        requestAnimationFrame(() => {
+          inputRef.current?.focus()
+          inputRef.current?.setSelectionRange(6, 6)
+        })
+        return
+      }
+
       // Cancel pending debounced save (it still has the old "/command" value)
       clearTimeout(debouncedSaveRef.current)
 

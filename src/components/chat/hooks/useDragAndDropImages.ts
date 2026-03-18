@@ -135,6 +135,10 @@ async function processDroppedSvg(
   sourcePath: string,
   sessionId: string
 ): Promise<void> {
+  // Guard against duplicate processing of the same file
+  if (processingPaths.has(sourcePath)) return
+  processingPaths.add(sourcePath)
+
   try {
     const { readTextFile } = await import('@tauri-apps/plugin-fs')
     const svgText = await readTextFile(sourcePath)
@@ -156,6 +160,8 @@ async function processDroppedSvg(
     toast.error('Failed to save SVG', {
       description: String(error),
     })
+  } finally {
+    processingPaths.delete(sourcePath)
   }
 }
 
